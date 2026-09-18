@@ -1,0 +1,32 @@
+# Production overlay: adds a Caddy TLS reverse proxy for the TradingView webhook.
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+services:
+  app:
+    environment:
+      TV_WEBHOOK_TRUST_PROXY: "true"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: tv-scanner-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      WEBHOOK_DOMAIN: ${WEBHOOK_DOMAIN:?set WEBHOOK_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.invalid}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,23 @@
+# Automatic Let's Encrypt TLS in front of the webhook gateway.
+# Only the webhook and health endpoints are exposed publicly; everything else returns 404.
+{
+	email {$ACME_EMAIL}
+}
+
+{$WEBHOOK_DOMAIN} {
+	encode gzip
+
+	@public path /webhooks/tradingview /healthz
+	handle @public {
+		reverse_proxy app:8080
+	}
+
+	handle {
+		respond 404
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

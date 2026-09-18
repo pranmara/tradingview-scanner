@@ -130,17 +130,54 @@ Two ways to feed indicators the scanner can't compute itself:
 
 Check what's arriving: `GET /indicators/BTCUSDT` with header `X-Webhook-Secret` returns the latest values per indicator. Rules are read at startup; restart the container after editing the file.
 
-## Deploy on a VPS
+## Deploy on a VPS (Ubuntu 22.04/24.04 or Debian 12)
+
+A 1 vCPU / 1 GB VPS is enough (app ≈ 250 MB RAM, Redis 128 MB cap, Caddy tiny).
+
+**1. DNS for the webhook (free).** TradingView only calls HTTPS webhooks, so you need a hostname. At [duckdns.org](https://www.duckdns.org) create a subdomain (e.g. `mybot.duckdns.org`) and set its IP to the VPS. Skip this if you only want the Telegram scanner — then run without the prod overlay.
+
+**2. Bootstrap the server** (installs Docker, opens ports 22/80/443, clones the repo into `/opt/tradingview-scanner`, writes `.env` with a random webhook secret):
 
 ```bash
-git clone <repo> tradingview-scanner && cd tradingview-scanner
-cp .env.example .env            # fill in TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, TV_WEBHOOK_SECRET
-docker compose up -d --build    # app + redis
-docker compose logs -f app
-curl -s localhost:8080/healthz  # {"status":"ok"}
+ssh root@<vps-ip>
+curl -fsSL https://raw.githubusercontent.com/pranmara/tradingview-scanner/main/deploy/bootstrap.sh | bash
 ```
 
-- Telegram uses long polling — no inbound port needed for the bot. Only `8080` (webhook gateway) must be reachable by TradingView. Put it behind a TLS reverse proxy (Caddy/nginx) and set `TV_WEBHOOK_TRUST_PROXY=true` so the IP allowlist sees the real client IP.
+**3. Configure**
+
+```bash
+nano /opt/tradingview-scanner/.env
+```
+
+Required: `TELEGRAM_BOT_TOKEN` (from @BotFather), `TELEGRAM_ALLOWED_USER_IDS`, `WEBHOOK_DOMAIN`, `ACME_EMAIL`. Optional: `TV_SESSION_ID` (account indicators), `NANSEN_API_KEY`, `TWELVEDATA_API_KEY`, `ACCOUNT_EQUITY`. Don't know your Telegram id yet? Start with it empty, send `/scan` to the bot, and it replies with your id.
+
+**4. Start**
+
+```bash
+cd /opt/tradingview-scanner
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+docker compose logs -f app          # wait for {"msg": "service started", ...}
+curl -s https://mybot.duckdns.org/healthz      # {"status":"ok"}  (Caddy fetches the certificate on first request)
+```
+
+Without a domain: `docker compose up -d --build` (base file only) runs bot + Redis; the webhook stays on `127.0.0.1:8080`.
+
+**5. Verify from Telegram:** `/status` → upstream health; `/scan BTCUSDT 4h` → report.
+
+**6. Point TradingView at it.** In the Pine alert dialog, Webhook URL = `https://mybot.duckdns.org/webhooks/tradingview`, and set the script's *Webhook secret* input to the `TV_WEBHOOK_SECRET` from `.env` (`grep TV_WEBHOOK_SECRET .env`).
+
+**Operate**
+
+| Task | Command |
+|---|---|
+| Update to latest code | `sudo bash /opt/tradingview-scanner/deploy/update.sh` |
+| Logs | `docker compose logs -f app` (JSON lines; `docker compose logs caddy` for TLS/webhook access) |
+| Restart | `docker compose restart app` |
+| Backup | `tar czf scanner-backup.tgz /opt/tradingview-scanner/.env /opt/tradingview-scanner/data` |
+| Backtest on the server | `docker compose exec app python -m app.backtest BTCUSDT --tf 4h --bars 1500` |
+
+Security notes: `.env` is `chmod 600`; the app port is bound to loopback and only `/webhooks/tradingview` + `/healthz` are proxied; the container runs as a non-root user; Caddy renews certificates automatically; keep `TV_WEBHOOK_ENFORCE_IP_ALLOWLIST=true` (Caddy passes the real client IP and the overlay sets `TV_WEBHOOK_TRUST_PROXY=true`).
+
 - Find your Telegram user id by sending `/scan` once; the denial message prints it.
 - Timeframes: `5m 15m 30m 1h 4h 1d 1w`. Every scan also pulls 1h/4h/1d for confluence, plus 1w when scanning 1d or 1w.
 - Optional MCP container: `docker compose --profile mcp up -d --build` and set `TV_MCP_URL=http://tradingview-mcp:8000/mcp`.

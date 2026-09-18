@@ -17,6 +17,7 @@ COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 COPY app ./app
 COPY config ./config
+RUN mkdir -p /srv/data && chown -R app:app /srv
 USER app
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

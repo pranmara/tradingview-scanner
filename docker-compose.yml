@@ -7,7 +7,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"   # loopback only; Caddy (docker-compose.prod.yml) exposes it over HTTPS
     volumes:
       - ./config:/srv/config:ro
       - ./data:/srv/data
