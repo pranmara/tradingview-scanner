@@ -126,7 +126,7 @@ async def list_alerts(ticker: str, request: Request, x_webhook_secret: str | Non
     return [a.model_dump() for a in alerts]
 
 
-@router.get("/healthz")
+@router.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 

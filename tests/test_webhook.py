@@ -87,4 +87,5 @@ def test_hmac_header_when_configured() -> None:
 def test_health(settings: Settings) -> None:
     client = _client(settings)
     assert client.get("/healthz").json() == {"status": "ok"}
+    assert client.head("/healthz").status_code == 200
     assert client.get("/readyz").status_code == 200
