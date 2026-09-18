@@ -80,3 +80,13 @@ Built the full layout: `app/` (config, JSON logging, Pydantic schemas, retry pol
 2. Add `TV_SESSION_ID` and run `/indicators` — the one Route B path that needs your account to verify.
 3. Optional keys: `NANSEN_API_KEY`, `TWELVEDATA_API_KEY`; optional `ACCOUNT_EQUITY` for sizing.
 4. After a week of scans: `python -m app.backtest --journal data/signals.jsonl` to forward-test live calls.
+
+## 10. Documentation and follow-up guidance
+
+- Wrote `docs/SESSION_HISTORY.md` (this file) and `docs/USER_GUIDE.md` (commands, report reading, scoring rules, full `.env` reference, how-tos, backtesting, operations, troubleshooting, file map). Pushed as `7789903`.
+- Expanded the four open items into step-by-step walkthroughs (kept in `docs/USER_GUIDE.md` §7 and summarised here):
+  1. **TradingView alerts** — secret from `grep TV_WEBHOOK_SECRET .env`; paste `pine_script_template.pine` into Pine Editor → set *Indicator name* and *Webhook secret* inputs → *Add alert* with condition **"Any alert() function call"** and Webhook URL `https://tvwebhook.dedyn.io/webhooks/tradingview`; for an immediate test use the `alertcondition` variant with the `{{...}}` JSON in the Message box. Confirm with `docker compose logs --since 1h app | grep "pine alert accepted"`. Response codes: 401 secret mismatch, 403 non-TradingView IP, 422 malformed JSON. The bridge script (`pine_custom_indicator_bridge.pine`) streams values from any chart indicator via `input.source`.
+  2. **Account indicators** — copy the `sessionid` (and `sessionid_sign`) cookie from a logged-in browser (F12 → Application → Cookies) into `.env`, restart, `/status` shows `authenticated`, then `/indicators` → `/indicators add <n> plot=… above=… below=… points=…` (options: `bucket=`, `age=`, `in.<Input>=`, `as=`). The listing and study protocol are the unverified Route B pieces; output requested for validation.
+  3. **Keys** — `NANSEN_API_KEY` (paid tier; `NANSEN_MODE` advisory/strict; unmapped tokens need an entry in `config/nansen_token_map.json`) and `TWELVEDATA_API_KEY` (free tier, stock candles before Yahoo). Restart with the compose `up -d` command.
+  4. **Journal forward-test** — after ~30 journaled signals: `docker compose exec app python -m app.backtest --journal data/signals.jsonl`; compare BUY/SELL vs WATCH average R; adjust one threshold at a time.
+- **Operational gotcha found:** `docker compose logs caddy` returned *"no such service: caddy"* because Caddy lives only in the prod overlay. Fix: always pass both files, or `export COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml` once per shell (add to `~/.bashrc`). `deploy/update.sh` already passes both. Caddy's access log is empty until the first alert arrives.

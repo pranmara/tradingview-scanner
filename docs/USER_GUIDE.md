@@ -235,6 +235,11 @@ Read the **score calibration** table first: hit-rate of +2.5R-before-−1R by sc
 
 Containers: `tv-scanner-app` (non-root, port bound to 127.0.0.1:8080), `tv-scanner-redis` (AOF, 128 MB cap), `tv-scanner-caddy` (80/443, auto-renewing certificate). Public paths: only `/webhooks/tradingview` and `/healthz`.
 
+**Compose files:** Caddy is defined only in `docker-compose.prod.yml`, so `docker compose logs caddy` (or `up`, `ps`) fails with *"no such service"* unless both files are passed. Set once per shell — or add to `~/.bashrc` — and every `docker compose` command includes it:
+```bash
+export COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+```
+
 ## 10. Troubleshooting
 
 | Symptom | Cause / fix |
