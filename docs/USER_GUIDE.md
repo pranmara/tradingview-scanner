@@ -174,6 +174,16 @@ Payload: symbol, side, timeframe, entry, stop_loss, take_profits[3], score, rrr,
 3. Create alert → Condition: the script → "Any alert() function call" → Webhook URL `https://tvwebhook.dedyn.io/webhooks/tradingview`.
 4. Confirm: `docker compose logs app | grep "pine alert accepted"`; the next `/scan` shows it under *Pine alerts*.
 
+**Local test without TradingView** (from the VPS). Requests via the published port arrive from the Docker bridge IP, not 127.0.0.1, so the allowlist rejects plain `curl`. Because the prod overlay trusts proxy headers (Caddy overwrites them for real traffic), present a TradingView IP explicitly:
+```bash
+SECRET=$(grep ^TV_WEBHOOK_SECRET .env | cut -d= -f2)
+curl -s -w '\nHTTP %{http_code}\n' -X POST http://127.0.0.1:8080/webhooks/tradingview \
+  -H 'Content-Type: application/json' -H 'X-Forwarded-For: 52.89.214.238' \
+  -d "{\"ticker\":\"BINANCE:BTCUSDT\",\"timeframe\":\"240\",\"indicator\":\"WebhookTest\",\"signal\":\"BUY\",\"price\":78000,\"timestamp\":$(date +%s000),\"secret_key\":\"$SECRET\"}"
+curl -s http://127.0.0.1:8080/alerts/BTCUSDT -H "X-Webhook-Secret: $SECRET"
+```
+Expect `HTTP 202`, then `409` on a repeat (dedupe), `401` with a wrong secret.
+
 Payload format (if writing your own): `{"ticker":"BINANCE:BTCUSDT","timeframe":"240","indicator":"Name","signal":"BUY|SELL|NEUTRAL","price":123.4,"timestamp":1726650000000,"values":{"k":1.2},"secret_key":"..."}`.
 
 ### 7.2 Stream any chart indicator's values (no source access needed)
