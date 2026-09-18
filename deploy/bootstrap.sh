@@ -35,9 +35,15 @@ ufw status | sed 's/^/  /'
 
 log "Repository -> $DIR"
 if [ -d "$DIR/.git" ]; then
-  git -C "$DIR" pull --ff-only
+  # Existing clone (e.g. private repo cloned by hand): try to update, but never block the bootstrap on credentials.
+  GIT_TERMINAL_PROMPT=0 git -C "$DIR" pull --ff-only || echo "  (pull skipped — keep the existing checkout)"
 else
-  git clone "$REPO" "$DIR"
+  GIT_TERMINAL_PROMPT=0 git clone "$REPO" "$DIR" || {
+    echo "  clone failed — if the repo is private, clone it manually first:" >&2
+    echo "    git clone https://github.com/pranmara/tradingview-scanner.git $DIR   (username + fine-grained PAT)" >&2
+    echo "  then re-run this script." >&2
+    exit 1
+  }
 fi
 cd "$DIR"
 
