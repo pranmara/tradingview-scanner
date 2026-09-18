@@ -1,0 +1,51 @@
+//@version=5
+// ─────────────────────────────────────────────────────────────────────────────
+// Scanner Gateway — Alert Template
+//
+// Setup:
+//   1. Pine Editor → paste → "Add to chart".
+//   2. Inputs: set "Indicator name" and "Webhook secret" (must equal TV_WEBHOOK_SECRET in .env).
+//   3. Create alert → Condition: this indicator → "Any alert() function call"
+//      → Webhook URL: https://<your-host>/webhooks/tradingview
+//      (Message box can stay empty; the payload is built by alert() below.)
+//
+// Payload sent (JSON):
+//   {"ticker":"BINANCE:BTCUSDT","timeframe":"240","indicator":"SuperTrend_V2",
+//    "signal":"BUY","price":65432.1,"timestamp":1726650000000,"secret_key":"..."}
+//
+// Replace the SuperTrend block with your own logic; keep buildPayload() and alert() calls.
+// ─────────────────────────────────────────────────────────────────────────────
+indicator("Scanner Gateway — Alert Template", overlay = true)
+
+indicatorName = input.string("SuperTrend_V2", "Indicator name (sent to scanner)")
+webhookSecret = input.string("", "Webhook secret (TV_WEBHOOK_SECRET)")
+atrPeriod     = input.int(10, "SuperTrend ATR period", minval = 1)
+factor        = input.float(3.0, "SuperTrend factor", minval = 0.5, step = 0.1)
+
+[supertrend, direction] = ta.supertrend(factor, atrPeriod)
+buySignal  = ta.change(direction) < 0   // direction flips to -1 → uptrend
+sellSignal = ta.change(direction) > 0   // direction flips to +1 → downtrend
+
+plot(direction < 0 ? supertrend : na, "Up trend",   color = color.new(color.green, 0), style = plot.style_linebr)
+plot(direction > 0 ? supertrend : na, "Down trend", color = color.new(color.red, 0),   style = plot.style_linebr)
+plotshape(buySignal,  "BUY",  shape.labelup,   location.belowbar, color.green, text = "BUY",  textcolor = color.white)
+plotshape(sellSignal, "SELL", shape.labeldown, location.abovebar, color.red,   text = "SELL", textcolor = color.white)
+
+buildPayload(string sig) =>
+    '{"ticker":"' + syminfo.tickerid + '","timeframe":"' + timeframe.period + '","indicator":"' + indicatorName +
+      '","signal":"' + sig + '","price":' + str.tostring(close, "#.########") +
+      ',"timestamp":' + str.tostring(timenow) +
+      ',"values":{"supertrend":' + str.tostring(supertrend, "#.########") + ',"atr":' + str.tostring(ta.atr(atrPeriod), "#.########") + '}' +
+      ',"secret_key":"' + webhookSecret + '"}'
+
+if barstate.isconfirmed and buySignal
+    alert(buildPayload("BUY"), alert.freq_once_per_bar_close)
+if barstate.isconfirmed and sellSignal
+    alert(buildPayload("SELL"), alert.freq_once_per_bar_close)
+
+// ── Alternative for scripts that only expose alertcondition() ────────────────
+// Create the alert on one of the conditions below and paste this into the Message box
+// (TradingView substitutes the {{...}} placeholders; it cannot add HTTP headers):
+// {"ticker":"{{exchange}}:{{ticker}}","timeframe":"{{interval}}","indicator":"SuperTrend_V2","signal":"BUY","price":{{close}},"timestamp":"{{timenow}}","secret_key":"YOUR_WEBHOOK_SECRET"}
+alertcondition(buySignal,  "Scanner BUY (alertcondition)",  "BUY")
+alertcondition(sellSignal, "Scanner SELL (alertcondition)", "SELL")

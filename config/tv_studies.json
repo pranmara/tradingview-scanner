@@ -1,0 +1,4 @@
+{
+  "_comment": "Account-only Pine indicators pulled through the TradingView session feed (experimental). Each entry is fetched on the primary timeframe during a scan and injected as a NEUTRAL Pine alert whose `values` are the study's latest plot values (keys: sanitised plot titles and plot_0, plot_1, ...). Score them via config/custom_indicators.json using `value` mode. Find the pine id in the indicator's URL or the browser network tab (PUB;..., USER;..., STD;...).",
+  "_example_MyPrivateOsc": {"pine_id": "USER;0123456789abcdef", "inputs": {"Length": 14}, "bars": 300}
+}

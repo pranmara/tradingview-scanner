@@ -1,0 +1,66 @@
+services:
+  app:
+    build: .
+    image: tradingview-scanner:latest
+    container_name: tv-scanner-app
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/srv/config:ro
+      - ./data:/srv/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  redis:
+    image: redis:7-alpine
+    container_name: tv-scanner-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # Optional: start with `docker compose --profile mcp up -d` and set TV_MCP_URL=http://tradingview-mcp:8000/mcp
+  tradingview-mcp:
+    build:
+      context: ./mcp/tradingview
+      args:
+        MCP_PACKAGE: ${TV_MCP_PACKAGE:-tradingview-mcp-server}
+        MCP_ENTRYPOINT: ${TV_MCP_ENTRYPOINT:-tradingview-mcp-server}
+    image: tradingview-mcp:latest
+    container_name: tv-scanner-mcp
+    profiles: ["mcp"]
+    expose:
+      - "8000"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  redis-data:

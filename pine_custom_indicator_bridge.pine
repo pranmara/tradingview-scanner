@@ -1,0 +1,55 @@
+//@version=5
+// ─────────────────────────────────────────────────────────────────────────────
+// Scanner Gateway — Custom Indicator Bridge
+//
+// Streams the values of ANY indicator already on your chart to the scanner without
+// modifying that indicator. Pine's input.source() lets you pick another script's plot.
+//
+// Setup:
+//   1. Add your custom indicator(s) to the chart as usual.
+//   2. Add this script. In its settings, set "Source 1..3" to the plots of those indicators
+//      (the dropdown lists every plot of every script on the chart).
+//   3. Set "Indicator name" (must match a key in config/custom_indicators.json, e.g. "Bridge"
+//      or "SqueezeMomentum") and the webhook secret.
+//   4. Create alert → "Any alert() function call" → Webhook URL https://<host>/webhooks/tradingview
+//
+// The scanner receives a NEUTRAL "state" alert every bar close with {"values": {...}} and,
+// optionally, BUY/SELL alerts when Source 1 crosses the thresholds below. The rules file decides
+// how many confluence points each indicator contributes and which bucket it feeds.
+// ─────────────────────────────────────────────────────────────────────────────
+indicator("Scanner Gateway — Custom Indicator Bridge", overlay = false)
+
+indicatorName = input.string("Bridge", "Indicator name (key in custom_indicators.json)")
+webhookSecret = input.string("", "Webhook secret (TV_WEBHOOK_SECRET)")
+src1 = input.source(close, "Source 1 (primary — used for BUY/SELL crossings)")
+src2 = input.source(close, "Source 2")
+src3 = input.source(close, "Source 3")
+sendState    = input.bool(true,  "Send state alert every bar close")
+sendCrosses  = input.bool(true,  "Send BUY/SELL when Source 1 crosses thresholds")
+bullLevel    = input.float(0.0,  "BUY when Source 1 crosses above")
+bearLevel    = input.float(0.0,  "SELL when Source 1 crosses below")
+
+plot(src1, "Source 1", color = color.new(color.aqua, 0))
+hline(bullLevel, "Bull level", color = color.new(color.green, 50))
+hline(bearLevel, "Bear level", color = color.new(color.red, 50))
+
+fmt(float v) =>
+    na(v) ? "null" : str.tostring(v, "#.########")
+
+payload(string sig) =>
+    '{"ticker":"' + syminfo.tickerid + '","timeframe":"' + timeframe.period + '","indicator":"' + indicatorName +
+      '","signal":"' + sig + '","price":' + str.tostring(close, "#.########") + ',"timestamp":' + str.tostring(timenow) +
+      ',"values":{"src1":' + fmt(src1) + ',"src2":' + fmt(src2) + ',"src3":' + fmt(src3) +
+      ',"rsi":' + fmt(ta.rsi(close, 14)) + ',"atr":' + fmt(ta.atr(14)) + '}' +
+      ',"secret_key":"' + webhookSecret + '"}'
+
+crossUp   = ta.crossover(src1, bullLevel)
+crossDown = ta.crossunder(src1, bearLevel)
+
+if barstate.isconfirmed
+    if sendCrosses and crossUp
+        alert(payload("BUY"), alert.freq_once_per_bar_close)
+    else if sendCrosses and crossDown
+        alert(payload("SELL"), alert.freq_once_per_bar_close)
+    else if sendState
+        alert(payload("NEUTRAL"), alert.freq_once_per_bar_close)

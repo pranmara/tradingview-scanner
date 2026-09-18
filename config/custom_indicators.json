@@ -1,0 +1,8 @@
+{
+  "_comment": "Maps Pine alert `indicator` names (webhook alerts AND tv_studies.json entries) to confluence contributions. Unknown indicators fall back to indicators-bucket/5pts/2 bars. `value` mode reads alert.values[<key>] and compares against bullish_above / bearish_below instead of using the BUY/SELL signal.",
+  "_example_MyPrivateOsc": {"bucket": "indicators", "points": 8, "max_age_bars": 2, "value": "plot_0", "bullish_above": 0, "bearish_below": 0},
+  "SuperTrend_V2": {"bucket": "trend", "points": 6, "max_age_bars": 3},
+  "SqueezeMomentum": {"bucket": "momentum", "points": 5, "max_age_bars": 2, "value": "mom", "bullish_above": 0, "bearish_below": 0},
+  "VolumeOsc": {"bucket": "momentum", "points": 4, "max_age_bars": 2, "value": "osc", "bullish_above": 10, "bearish_below": -10},
+  "Bridge": {"bucket": "momentum", "points": 4, "max_age_bars": 2, "value": "src1", "bullish_above": 0, "bearish_below": 0}
+}
