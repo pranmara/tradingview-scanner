@@ -199,6 +199,12 @@ Use `pine_custom_indicator_bridge.pine`: set *Source 1..3* to the plots of other
 
 This uses TradingView's internal chart protocol (unofficial). If TradingView changes it, `/indicators` fails cleanly and scans continue without the studies.
 
+### 7.3b Invite-only / protected scripts (no source access)
+- **Bridge (preferred):** add the invite-only indicator *and* `pine_custom_indicator_bridge.pine` to the same chart; in the bridge's inputs set *Source 1..3* to the invite-only script's plots (the dropdown lists them under the script's name; titles match its *Style* tab), set thresholds and a name; alert on "Any alert() function call"; add a rule `{"value": "src1", "bullish_above": …, "bearish_below": …, "points": …}` under that name in `config/custom_indicators.json`; restart.
+- **Its own alert conditions:** create the alert on the vendor's *Buy*/*Sell* condition and paste in the Message box:
+  `{"ticker":"{{exchange}}:{{ticker}}","timeframe":"{{interval}}","indicator":"Name","signal":"BUY","price":{{close}},"timestamp":"{{timenow}}","secret_key":"SECRET"}` (one alert per condition, `SELL` for the sell one).
+- **Account session:** `/indicators` lists invite-only scripts you've been granted; `add` one and every scan runs it server-side (§7.3). Use this when plots are hidden or you want no TradingView-side setup.
+
 ### 7.4 Weight your custom indicators
 Edit `config/custom_indicators.json` and restart:
 ```json

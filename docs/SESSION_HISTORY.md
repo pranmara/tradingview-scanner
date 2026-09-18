@@ -90,3 +90,24 @@ Built the full layout: `app/` (config, JSON logging, Pydantic schemas, retry pol
   3. **Keys** — `NANSEN_API_KEY` (paid tier; `NANSEN_MODE` advisory/strict; unmapped tokens need an entry in `config/nansen_token_map.json`) and `TWELVEDATA_API_KEY` (free tier, stock candles before Yahoo). Restart with the compose `up -d` command.
   4. **Journal forward-test** — after ~30 journaled signals: `docker compose exec app python -m app.backtest --journal data/signals.jsonl`; compare BUY/SELL vs WATCH average R; adjust one threshold at a time.
 - **Operational gotcha found:** `docker compose logs caddy` returned *"no such service: caddy"* because Caddy lives only in the prod overlay. Fix: always pass both files, or `export COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml` once per shell (add to `~/.bashrc`). `deploy/update.sh` already passes both. Caddy's access log is empty until the first alert arrives.
+
+## 11. Webhook verification on the live VPS
+
+Tested in three layers:
+
+1. **DNS/TLS** — `curl -sI https://tvwebhook.dedyn.io/healthz` returned `HTTP/2 405` with `via: 1.1 Caddy` / `server: uvicorn`: the chain works; 405 was because `-I` sends HEAD and the route was GET-only. Made `/healthz` accept HEAD for uptime monitors (`f6d024b`).
+2. **Gateway from inside the VPS** —
+   - Appending `127.0.0.1` to `TV_WEBHOOK_IP_ALLOWLIST` still gave `403`: requests via Docker's published port arrive from the bridge gateway IP, not loopback. Correct method: send `X-Forwarded-For: 52.89.214.238` (the overlay sets `TV_WEBHOOK_TRUST_PROXY=true`; Caddy overwrites the header for real traffic, so this can't be spoofed externally). Removed the allowlist line; guide corrected (`bbff261`).
+   - Then `401 invalid signature` — **real bug**: the blank `TV_WEBHOOK_HMAC_KEY=` line in `.env` loaded as an empty secret, enabling the HMAC header check that TradingView can never satisfy. Fixed with a validator that treats blank optional secrets/URLs as unset (`6630e24`, +2 tests, 60 passing). After `update.sh`: `{"status":"accepted","ticker":"BTCUSDT","timeframe":"4h"}` / `HTTP 202`. Two accepted alerts appear in the app log (both from curl).
+   - Explained the allowlist IPs: TradingView's four published webhook egress addresses (`52.89.214.238`, `34.212.75.30`, `54.218.53.128`, `52.32.178.7`); first check in the chain; secret is the primary authentication.
+3. **From TradingView (pending)** — Caddy log shows no `/webhooks` request yet, i.e. no TradingView-originated alert has fired. Test recipe: a throw-away 1-minute Pine indicator calling `alert()` every bar close, alert condition **"Any alert() function call"**, Webhook URL ticked under *Notifications* (needs a paid TradingView plan). Success = a Caddy line with a `52./34./54.` source IP and status 202 plus a `pine alert accepted` line with `"timeframe": "1m"`. Delete the test alert afterwards.
+
+## 12. Invite-only indicators → Telegram: the three routes
+
+Documented how to get alerts from invite-only/protected scripts (whose source can't be edited) into the scanner:
+
+1. **Bridge script (recommended)** — add the invite-only indicator and `pine_custom_indicator_bridge.pine` to the same chart; in the bridge's inputs set *Source 1..3* (`input.source`) to the invite-only script's plots (names match its *Style* tab), set thresholds, name it; alert on "Any alert() function call" → webhook URL; add a rule in `config/custom_indicators.json` keyed by that name with `value: "src1"` and `bullish_above`/`bearish_below`; restart. Streams values every bar; the scan lists them and credits points. Fails only if the script hides its plots.
+2. **The script's own `alertcondition`s** — create the alert on the vendor's condition and paste the scanner JSON (with `{{exchange}}:{{ticker}}`, `{{interval}}`, `{{close}}`, `{{timenow}}` placeholders, hard-coded `signal`, and the secret) in the Message box. Discrete events only.
+3. **Account session (`/indicators`)** — with `TV_SESSION_ID`, list the account's scripts (incl. invite-only) and `add` one so every scan runs it server-side and reads its plots; no TradingView-side setup, works for hidden plots, unofficial protocol.
+
+All routes land in the same alert store and surface in the next `/scan` report and verdict.
