@@ -289,6 +289,7 @@ class BucketScore(BaseModel):
     bullish: float
     bearish: float
     available: bool = True
+    bonus: bool = Field(default=False, description="Credit added on top of the 100-point base when available")
     notes: list[str] = Field(default_factory=list)
 
 

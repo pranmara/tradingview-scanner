@@ -52,7 +52,7 @@ Score 33/100 ▓▓▓░░░░░░░  (bull 33 / bear 7, coverage 90%)
 ```
 - **Verdict**: 🟢 BUY / 🔴 SELL only when score ≥ 80, effective RRR ≥ 2.5 and **no vetoes**. 🟡 WATCH = 60–79. ⚪ NEUTRAL otherwise.
 - **bull / bear**: both sides are scored; the higher one is the direction. A big gap means one-sided evidence.
-- **coverage**: how many of the 100 points had data. 90 % = Nansen absent (normal without a key).
+- **coverage**: how many of the 100 base points had data (Nansen is a credit, not part of coverage — 100 % is normal without a key; lower means a base bucket such as Institutional Flow had no candles).
 
 **Confluence Matrix** — points per bucket for the chosen direction (see §4).
 
@@ -72,17 +72,17 @@ Score 33/100 ▓▓▓░░░░░░░  (bull 33 / bear 7, coverage 90%)
 
 ## 4. Scoring rules
 
-TradingView-derived evidence carries **90 points**; on-chain is an optional 10.
+The **base matrix is 100 points** of TradingView-derived evidence. Nansen has **zero base weight** — when activated (`NANSEN_MODE` ≠ off, key set, data returned) it adds a credit of up to 10 points on top, capped at 100. Stock context (volume profile / RS) is a credit in the same way.
 
 | Bucket | Max | Inputs |
 |---|---|---|
-| Trend & Structure | 25 | EMA 20/50/200 ribbon per TF (primary weighted 50 %, others 25 %); MSB / CHoCH on 1h & 4h |
-| Momentum & Volatility | 20 | Hidden RSI divergence per TF; BB squeeze (BBW < 0.05) + volume > 1.5× 20-SMA |
+| Trend & Structure | 30 | EMA 20/50/200 ribbon per TF (primary weighted 50 %, others 25 %); MSB / CHoCH on 1h & 4h |
+| Momentum & Volatility | 25 | Hidden RSI divergence per TF; BB squeeze (BBW < 0.05) + volume > 1.5× 20-SMA |
 | Institutional Flow | 20 | Anchored VWAP bias, liquidity-sweep reversal, fair-value-gap proximity, order-block retest, premium/discount (README → *Institutional playbook*). Also sharpens stops (beyond swept liquidity) and targets (liquidity pools) |
 | TradingView Indicators | 15 | TradingView `Recommend.All` rating per TF (≤ 7.5) + your custom indicators (alerts & account studies) via `config/custom_indicators.json` |
-| Context — crypto | 10 | Nansen: SM 24h netflow (4), exchange netflow (4), top-10 holder change (2); `NANSEN_MODE` decides veto vs caution |
-| Context — stock | 10 | Volume-profile position vs POC / value area (5); 20-bar return vs sector ETF or SPY (5) |
 | Execution Risk | 10 | RRR at TP2 vs `MIN_RRR`; 0 if stop distance > `MAX_STOP_DISTANCE_PCT` |
+| Credit — crypto | +10 | Nansen: SM 24h netflow (4), exchange netflow (4), top-10 holder change (2); `NANSEN_MODE` decides veto vs caution. Shown as `+x credit` in the matrix |
+| Credit — stock | +10 | Volume-profile position vs POC / value area (5); 20-bar return vs sector ETF or SPY (5) |
 
 Regime gates (vetoes): `HTF_BIAS_FILTER`, `MIN_ADX`, `RSI_OVEREXTENDED`, structural RRR cap, stop-distance cap, snapshot-only data.
 

@@ -12,19 +12,19 @@ Pine alert ──► POST /webhooks/tradingview ──► alert store ───�
 
 ## Confluence Matrix
 
-TradingView-derived evidence carries **90 of 100 points**; on-chain data is an optional 10-point modifier.
+The **base matrix is 100 points of TradingView-derived evidence**. On-chain data (Nansen) carries **zero base weight**: when it is activated and returns data it adds a *credit* of up to 10 points on top (score capped at 100). The stock-side context (volume profile / relative strength) is treated the same way.
 
 | Bucket | Weight | Inputs |
 |---|---|---|
-| Trend & Structure | 25 | EMA 20/50/200 ribbon per TF (primary 50 %, others 25 %); MSB / CHoCH on 1h & 4h |
-| Momentum & Volatility | 20 | Hidden RSI divergence per TF; BBW < 0.05 squeeze + volume > 1.5× 20-SMA |
+| Trend & Structure | 30 | EMA 20/50/200 ribbon per TF (primary 50 %, others 25 %); MSB / CHoCH on 1h & 4h |
+| Momentum & Volatility | 25 | Hidden RSI divergence per TF; BBW < 0.05 squeeze + volume > 1.5× 20-SMA |
 | Institutional Flow | 20 | Anchored VWAP bias (5), liquidity sweep reversal (6), fair-value-gap proximity (4), order-block retest (3), premium/discount positioning (2) — see *Institutional playbook* |
 | TradingView Indicators | 15 | TradingView's technical rating (`Recommend.All`) per TF (≤ 7.5) + your custom Pine indicators via alerts or account studies (default bucket for `custom_indicators.json`) |
-| Context: On-chain (crypto) | 10 | Nansen, `NANSEN_MODE=off\|advisory\|strict`. Advisory (default) adds points and *cautions* only; strict turns negative SM netflow / heavy exchange inflow into hard vetoes |
-| Context: Volume Profile & RS (stocks) | 10 | Price vs POC / value area; 20-bar return vs sector ETF (or SPY) |
-| Execution Risk | 10 | SL = swing ± 1.5×ATR; RRR at TP2 ≥ 2.5; stop distance ≤ 8 % |
+| Execution Risk | 10 | SL = swing ± 1.5×ATR (or 0.5×ATR beyond swept liquidity); RRR at TP2 ≥ 2.5; stop distance ≤ 8 % |
+| **Credit:** On-chain (crypto) | +10 | Only when `NANSEN_MODE` ≠ off **and** a key is set **and** data returns. `advisory` (default): credit + *cautions*; `strict`: credit + hard vetoes |
+| **Credit:** Volume Profile & RS (stocks) | +10 | Price vs POC / value area; 20-bar return vs sector ETF (or SPY) |
 
-Bull and bear are scored independently; the dominant side becomes the direction. A `BUY`/`SELL` is emitted only when score ≥ `MIN_SIGNAL_SCORE` (80), effective RRR ≥ `MIN_RRR` (2.5) and no veto fired; 60–79 → `WATCH`. With Nansen absent or `off` the score is renormalised over the 90 TradingView points (coverage 90 %) — a fully aligned TA setup can trigger on its own.
+Bull and bear are scored independently; the dominant side becomes the direction. A `BUY`/`SELL` is emitted only when score ≥ `MIN_SIGNAL_SCORE` (80), effective RRR ≥ `MIN_RRR` (2.5) and no veto fired; 60–79 → `WATCH`. Coverage counts base buckets only, so Nansen being off or absent never lowers it — a fully aligned TA setup reaches 100 on its own, and Nansen can only add.
 
 **Effective RRR:** TP1/TP2/TP3 are 1.5R / 2.5R / 4R. If the nearest opposing swing (structural target) sits closer than 2.5R, RRR is capped at that structural value — a stop 1.5×ATR beyond the swing often makes this the binding constraint, which is intentional.
 

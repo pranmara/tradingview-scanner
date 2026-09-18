@@ -109,19 +109,40 @@ def test_strict_nansen_vetoes_long() -> None:
     assert any("netflow" in v.lower() for v in report.vetoes)
 
 
-def test_nansen_off_excludes_bucket() -> None:
+def test_nansen_off_gives_no_credit_and_full_coverage() -> None:
     s = Settings(_env_file=None, telegram_bot_token="1:x", tv_webhook_secret="s", redis_url=None, nansen_mode="off")  # type: ignore[call-arg]
     report = DecisionEngine(s).evaluate(ScanInputs(asset=classify("ETHUSDT"), primary=Timeframe.H4, analyses=_all_bullish(), onchain=_negative_onchain()))
-    assert report.coverage_pct == 90 and report.signal is Signal.BUY
+    assert report.coverage_pct == 100 and report.signal is Signal.BUY
+    ctx = next(b for b in report.buckets if b.key == "context")
+    assert ctx.bonus and not ctx.available
 
 
-def test_missing_onchain_renormalises_coverage(settings: Settings) -> None:
+def test_missing_onchain_keeps_base_matrix_at_100(settings: Settings) -> None:
     engine = DecisionEngine(settings)
     report = engine.evaluate(ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=_all_bullish(), onchain=None))
-    assert report.coverage_pct == 90
+    assert report.coverage_pct == 100  # Nansen absence never reduces coverage
     assert report.signal is Signal.BUY  # TA-only confluence is enough on its own
     onchain_bucket = next(b for b in report.buckets if b.key == "context")
-    assert not onchain_bucket.available and "Nansen" in onchain_bucket.name
+    assert onchain_bucket.bonus and not onchain_bucket.available and "Nansen" in onchain_bucket.name
+
+
+def test_nansen_credit_is_additive_and_capped(settings: Settings) -> None:
+    engine = DecisionEngine(settings)
+    positive = OnChainSnapshot(chain="ethereum", token_address="0x", source="nansen",
+                               sm_netflow_24h_usd=5_000_000, exchange_netflow_24h_usd=-9_000_000, top_holder_concentration_change_pct=2.0)
+    base = engine.evaluate(ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=_all_bullish(), onchain=None))
+    credited = engine.evaluate(ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=_all_bullish(), onchain=positive))
+    ctx = next(b for b in credited.buckets if b.key == "context")
+    assert ctx.available and ctx.bullish == 10.0
+    assert credited.bullish_score == min(100.0, round(base.bullish_score + 10.0, 1))
+    assert credited.coverage_pct == 100
+
+    weak = {tf: _analysis(tf) for tf in (Timeframe.H4,)}
+    weak[Timeframe.H4].institutional = None
+    weak[Timeframe.H4].structure = MarketStructure(trend="ranging", last_swing_high=112.0, last_swing_low=98.0)
+    lo = engine.evaluate(ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=weak, onchain=None))
+    hi = engine.evaluate(ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=weak, onchain=positive))
+    assert hi.bullish_score == round(lo.bullish_score + 10.0, 1)
 
 
 def test_tradingview_rating_feeds_indicators_bucket(settings: Settings) -> None:
@@ -155,8 +176,8 @@ def test_stock_uses_volume_profile_and_relative_strength(settings: Settings) -> 
     rs = RelativeStrength(benchmark="XLK", asset_return_pct=9.0, benchmark_return_pct=2.0)
     report = engine.evaluate(ScanInputs(asset=classify("AAPL"), primary=Timeframe.D1, analyses=_all_bullish(), relative_strength=rs))
     ctx = next(b for b in report.buckets if b.key == "context")
-    assert ctx.available and ctx.max_points == 10 and ctx.bullish > 7
-    assert report.direction is Side.BUY
+    assert ctx.available and ctx.bonus and ctx.max_points == 10 and ctx.bullish > 7
+    assert report.direction is Side.BUY and report.coverage_pct == 100
 
 
 def test_degraded_primary_is_vetoed_and_uses_atr_only_stop(settings: Settings) -> None:

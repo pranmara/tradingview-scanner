@@ -21,8 +21,10 @@ from app.schemas import (
     TimeframeAnalysis,
 )
 
-# TradingView-derived evidence carries 90 points; on-chain / benchmark context is a 10-point optional modifier.
-TREND_MAX, MOMENTUM_MAX, INSTITUTIONAL_MAX, INDICATORS_MAX, CONTEXT_MAX, EXECUTION_MAX = 25.0, 20.0, 20.0, 15.0, 10.0, 10.0
+# Base matrix = 100 points of TradingView-derived evidence. Context (Nansen for crypto, volume profile / relative
+# strength for stocks) is a bonus credit of up to CONTEXT_MAX applied only when that data is active and available.
+TREND_MAX, MOMENTUM_MAX, INSTITUTIONAL_MAX, INDICATORS_MAX, EXECUTION_MAX = 30.0, 25.0, 20.0, 15.0, 10.0
+CONTEXT_MAX = 10.0
 TP_MULTIPLES = (1.5, 2.5, 4.0)
 _TF_ORDER = (Timeframe.W1, Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5)
 _INTRADAY = (Timeframe.M5, Timeframe.M15, Timeframe.M30, Timeframe.H1)
@@ -102,14 +104,14 @@ class DecisionEngine:
         notes: list[str] = []
         for tf, ta in analyses.items():
             if ta.ribbon == "bullish":
-                bull += 15.0 * weights[tf]
+                bull += 18.0 * weights[tf]
                 notes.append(f"▲ {tf.value} EMA ribbon aligned bullish (20>50>200)")
             elif ta.ribbon == "bearish":
-                bear += 15.0 * weights[tf]
+                bear += 18.0 * weights[tf]
                 notes.append(f"▼ {tf.value} EMA ribbon aligned bearish (20<50<200)")
 
         structure_tfs = [tf for tf in (Timeframe.H1, Timeframe.H4) if tf in analyses] or [primary]
-        per_tf = 10.0 / len(structure_tfs)
+        per_tf = 12.0 / len(structure_tfs)
         for tf in structure_tfs:
             s = analyses[tf].structure
             if s.msb_bullish:
@@ -138,29 +140,29 @@ class DecisionEngine:
         notes: list[str] = []
         for tf, ta in analyses.items():
             if ta.hidden_div_bullish:
-                bull += 12.0 * weights[tf]
+                bull += 15.0 * weights[tf]
                 notes.append(f"▲ {tf.value} RSI hidden bullish divergence (price HL / RSI LL)")
             if ta.hidden_div_bearish:
-                bear += 12.0 * weights[tf]
+                bear += 15.0 * weights[tf]
                 notes.append(f"▼ {tf.value} RSI hidden bearish divergence (price LH / RSI HH)")
 
         p = analyses.get(primary) or next(iter(analyses.values()))
         if p.bb_squeeze and p.volume_expansion:
             if p.last_bar_bullish:
-                bull += 8.0
+                bull += 10.0
                 notes.append(f"▲ {p.timeframe.value} BB squeeze (BBW {p.bbw:.3f}) + volume {p.volume_ratio:.1f}x, bullish bar")
             else:
-                bear += 8.0
+                bear += 10.0
                 notes.append(f"▼ {p.timeframe.value} BB squeeze (BBW {p.bbw:.3f}) + volume {p.volume_ratio:.1f}x, bearish bar")
         elif p.volume_expansion:
             if p.last_bar_bullish:
-                bull += 3.0
+                bull += 4.0
             else:
-                bear += 3.0
+                bear += 4.0
             notes.append(f"• {p.timeframe.value} volume expansion {p.volume_ratio:.1f}x 20-SMA")
         elif p.bb_squeeze:
-            bull += 2.5
-            bear += 2.5
+            bull += 3.0
+            bear += 3.0
             notes.append(f"• {p.timeframe.value} BB squeeze (BBW {p.bbw:.3f}) — breakout pending, direction unknown")
 
         return _Bucket(BucketScore(key="momentum", name="Momentum & Volatility", max_points=MOMENTUM_MAX,
@@ -259,13 +261,13 @@ class DecisionEngine:
 
     def _onchain_bucket(self, oc: OnChainSnapshot | None) -> _Bucket:
         mode = self._s.nansen_mode
-        name = f"On-Chain (Nansen, {mode})"
+        name = f"On-Chain credit (Nansen, {mode})"
         if mode == "off":
-            return _Bucket(BucketScore(key="context", name=name, max_points=CONTEXT_MAX, bullish=0, bearish=0,
-                                       available=False, notes=["• Nansen disabled (NANSEN_MODE=off)"]))
+            return _Bucket(BucketScore(key="context", name=name, max_points=CONTEXT_MAX, bullish=0, bearish=0, bonus=True,
+                                       available=False, notes=["• Nansen disabled (NANSEN_MODE=off) — no on-chain credit"]))
         if oc is None or not oc.has_data:
-            return _Bucket(BucketScore(key="context", name=name, max_points=CONTEXT_MAX, bullish=0, bearish=0,
-                                       available=False, notes=["• Nansen data unavailable — optional bucket excluded"]))
+            return _Bucket(BucketScore(key="context", name=name, max_points=CONTEXT_MAX, bullish=0, bearish=0, bonus=True,
+                                       available=False, notes=["• Nansen data unavailable — no on-chain credit applied"]))
         bull = bear = max_pts = 0.0
         notes: list[str] = []
         flags_long: list[str] = []
@@ -313,9 +315,9 @@ class DecisionEngine:
                 notes.append(f"▼ Top-10 holders distributing ({chg:+.2f}% 24h)")
 
         if max_pts == 0:
-            return _Bucket(BucketScore(key="context", name=name, max_points=CONTEXT_MAX, bullish=0, bearish=0,
-                                       available=False, notes=["• Nansen returned no usable metrics — optional bucket excluded"]))
-        bucket = _Bucket(BucketScore(key="context", name=name, max_points=max_pts, bullish=bull, bearish=bear, notes=notes))
+            return _Bucket(BucketScore(key="context", name=name, max_points=CONTEXT_MAX, bullish=0, bearish=0, bonus=True,
+                                       available=False, notes=["• Nansen returned no usable metrics — no on-chain credit applied"]))
+        bucket = _Bucket(BucketScore(key="context", name=name, max_points=max_pts, bullish=bull, bearish=bear, bonus=True, notes=notes))
         if mode == "strict":
             bucket.veto_long, bucket.veto_short = flags_long, flags_short
         else:
@@ -323,7 +325,7 @@ class DecisionEngine:
         return bucket
 
     def _stock_context_bucket(self, p: TimeframeAnalysis, rs: RelativeStrength | None) -> _Bucket:
-        name = "Volume Profile & Relative Strength"
+        name = "Volume Profile & Relative Strength credit"
         bull = bear = max_pts = 0.0
         notes: list[str] = []
         vp = p.volume_profile
@@ -351,9 +353,9 @@ class DecisionEngine:
                 bear += pts
                 notes.append(f"▼ Underperforming {rs.benchmark} by {rs.delta_pct:+.2f}% over 20 bars")
         if max_pts == 0:
-            return _Bucket(BucketScore(key="context", name=name, max_points=CONTEXT_MAX, bullish=0, bearish=0,
-                                       available=False, notes=["• Volume profile / benchmark unavailable — optional bucket excluded"]))
-        return _Bucket(BucketScore(key="context", name=name, max_points=max_pts, bullish=bull, bearish=bear, notes=notes))
+            return _Bucket(BucketScore(key="context", name=name, max_points=CONTEXT_MAX, bullish=0, bearish=0, bonus=True,
+                                       available=False, notes=["• Volume profile / benchmark unavailable — no credit applied"]))
+        return _Bucket(BucketScore(key="context", name=name, max_points=max_pts, bullish=bull, bearish=bear, bonus=True, notes=notes))
 
     # ------------------------------------------------------------------ filters
     def _regime_vetoes(self, direction: Side, analyses: dict[Timeframe, TimeframeAnalysis], primary: Timeframe) -> list[str]:
@@ -480,10 +482,16 @@ class DecisionEngine:
         execution = BucketScore(key="execution", name="Execution Risk (ATR SL / RRR)", max_points=EXECUTION_MAX,
                                 bullish=long_exec, bearish=short_exec, notes=[])
 
-        buckets = [trend.score, momentum.score, institutional.score, indicators.score, context.score, execution]
-        total_max = sum(b.max_points for b in buckets if b.available) or 1.0
-        bull_score = round(sum(b.bullish for b in buckets if b.available) / total_max * 100.0, 1)
-        bear_score = round(sum(b.bearish for b in buckets if b.available) / total_max * 100.0, 1)
+        base = [trend.score, momentum.score, institutional.score, indicators.score, execution]
+        buckets = base + [context.score]
+        total_max = sum(b.max_points for b in base if b.available) or 1.0
+        bull_base = sum(b.bullish for b in base if b.available) / total_max * 100.0
+        bear_base = sum(b.bearish for b in base if b.available) / total_max * 100.0
+        # Context is a credit: it is added on top only when active/available and can never be required to reach 100.
+        bonus_bull = context.score.bullish if context.score.available else 0.0
+        bonus_bear = context.score.bearish if context.score.available else 0.0
+        bull_score = round(min(100.0, bull_base + bonus_bull), 1)
+        bear_score = round(min(100.0, bear_base + bonus_bear), 1)
         coverage = round(total_max, 1)
 
         direction: Side | None

@@ -59,7 +59,10 @@ def format_report(r: ConfluenceReport) -> str:
     ]
     for b in r.buckets:
         pts = b.bullish if r.direction is Side.BUY else b.bearish if r.direction is Side.SELL else max(b.bullish, b.bearish)
-        shown = f"{pts:.1f}/{b.max_points:.0f}" if b.available else "n/a"
+        if b.bonus:
+            shown = f"+{pts:.1f} credit (max {b.max_points:.0f})" if b.available else "no credit"
+        else:
+            shown = f"{pts:.1f}/{b.max_points:.0f}" if b.available else "n/a"
         lines.append(f"<code>{e(b.name[:34]):<34}</code> {shown}")
 
     lv = r.levels

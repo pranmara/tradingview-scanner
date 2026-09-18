@@ -130,3 +130,11 @@ All routes land in the same alert store and surface in the next `/scan` report a
 **Re-balanced matrix:** Trend 25 · Momentum 20 · Institutional 20 · TradingView Indicators 15 · Context 10 · Execution 10 (= 100). Report gained an *Institutional (tf)* block (VWAP/anchor/slope, sweeps, FVG/OB zones, dealing-range position, pools). README "Institutional playbook" table and user guide updated.
 
 **Verification:** 69 tests (11 new for the detectors and engine behaviour); live `BTCUSDT 4h` scan rendered real VWAP/FVG/OB/range/pool data; 1500-bar backtest ran with the bucket (still no strict signals on BTC 4h; calibration 8.7 % → 13.2 % below score 60 — reported as-is). Fixed a note formatter that printed large prices in scientific notation.
+
+## 14. Nansen as a pure credit (zero base weight)
+
+**Ask:** reduce Nansen's weight to zero, redistribute to the other buckets, and only apply Nansen credit when Nansen is activated.
+
+- Base matrix now sums to 100 from TradingView-derived evidence: Trend 30 · Momentum 25 · Institutional 20 · TradingView Indicators 15 · Execution 10.
+- Context buckets became **credits** (`BucketScore.bonus=True`): Nansen (crypto) and Volume Profile / Relative Strength (stocks) add up to +10 to the bull or bear side *on top* of the base percentage, capped at 100, and only when active and data is available. Coverage counts base buckets only, so Nansen off/absent no longer shows 90 %.
+- Report renders them as `+x.x credit (max 10)` or `no credit`. README, user guide and `.env.example` updated; tests adjusted and a new test proves the credit is additive and capped.
