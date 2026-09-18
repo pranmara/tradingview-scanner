@@ -111,3 +111,22 @@ Documented how to get alerts from invite-only/protected scripts (whose source ca
 3. **Account session (`/indicators`)** — with `TV_SESSION_ID`, list the account's scripts (incl. invite-only) and `add` one so every scan runs it server-side and reads its plots; no TradingView-side setup, works for hidden plots, unofficial protocol.
 
 All routes land in the same alert store and surface in the next `/scan` report and verdict.
+
+## 13. Institutional-flow bucket ("market maker / institutional strategies")
+
+**Ask:** incorporate profitable strategies used by market makers and financial institutions.
+
+**Framing given:** genuine market making (two-sided quoting, spread capture, inventory management on colocated infrastructure) is not a signal and cannot be replicated by a scanner. What can be measured from candles is the *execution footprint* of large participants, so that is what was added — as evidence with weights, subject to the same backtest/calibration discipline as everything else.
+
+**Implemented (`app/institutional.py`, new 20-point bucket):**
+- Anchored VWAP from the most recent major swing (120-bar extreme) with volume-weighted ±2σ bands; above-and-rising = 5 pts (time-weighted fallback when a feed has no volume).
+- Liquidity sweep: bar trades beyond the prior swing low/high but closes back inside = 6 pts; the stop is then placed 0.5×ATR beyond the swept level (institutional stop placement, usually tighter than swing − 1.5×ATR).
+- Fair value gaps (three-candle imbalances, unfilled): price at/near one in trend direction = 4 pts, exists = 1.
+- Order blocks (last opposing candle before a ≥ 1.5×ATR impulse that broke it, not invalidated): retest = 3 pts, exists = 1.
+- Premium/discount within the dealing range of recent swings: < 40 % discount favours longs, > 60 % premium favours shorts (2 pts).
+- Equal highs/lows (liquidity pools) become the structural target when nearer than the last swing.
+- Kill-zone session caution for intraday scans outside London 07–10 / NY 12–15 UTC (`SESSION_FILTER`, caution not veto).
+
+**Re-balanced matrix:** Trend 25 · Momentum 20 · Institutional 20 · TradingView Indicators 15 · Context 10 · Execution 10 (= 100). Report gained an *Institutional (tf)* block (VWAP/anchor/slope, sweeps, FVG/OB zones, dealing-range position, pools). README "Institutional playbook" table and user guide updated.
+
+**Verification:** 69 tests (11 new for the detectors and engine behaviour); live `BTCUSDT 4h` scan rendered real VWAP/FVG/OB/range/pool data; 1500-bar backtest ran with the bucket (still no strict signals on BTC 4h; calibration 8.7 % → 13.2 % below score 60 — reported as-is). Fixed a note formatter that printed large prices in scientific notation.

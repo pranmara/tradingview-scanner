@@ -22,9 +22,11 @@ from app.schemas import (
 )
 
 # TradingView-derived evidence carries 90 points; on-chain / benchmark context is a 10-point optional modifier.
-TREND_MAX, MOMENTUM_MAX, INDICATORS_MAX, CONTEXT_MAX, EXECUTION_MAX = 30.0, 30.0, 20.0, 10.0, 10.0
+TREND_MAX, MOMENTUM_MAX, INSTITUTIONAL_MAX, INDICATORS_MAX, CONTEXT_MAX, EXECUTION_MAX = 25.0, 20.0, 20.0, 15.0, 10.0, 10.0
 TP_MULTIPLES = (1.5, 2.5, 4.0)
 _TF_ORDER = (Timeframe.W1, Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5)
+_INTRADAY = (Timeframe.M5, Timeframe.M15, Timeframe.M30, Timeframe.H1)
+_KILL_ZONES_UTC = ((7, 10), (12, 15))  # London open, New York open
 
 
 def management_plan(time_stop_bars: int, risk_pct: float) -> list[str]:
@@ -65,6 +67,14 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+def _fmt(p: float) -> str:
+    if p >= 1000:
+        return f"{p:,.2f}"
+    if p >= 1:
+        return f"{p:,.4f}".rstrip("0").rstrip(".")
+    return f"{p:.6g}"
+
+
 class DecisionEngine:
     def __init__(self, settings: Settings, rules: CustomIndicatorRules | None = None) -> None:
         self._s = settings
@@ -92,14 +102,14 @@ class DecisionEngine:
         notes: list[str] = []
         for tf, ta in analyses.items():
             if ta.ribbon == "bullish":
-                bull += 18.0 * weights[tf]
+                bull += 15.0 * weights[tf]
                 notes.append(f"▲ {tf.value} EMA ribbon aligned bullish (20>50>200)")
             elif ta.ribbon == "bearish":
-                bear += 18.0 * weights[tf]
+                bear += 15.0 * weights[tf]
                 notes.append(f"▼ {tf.value} EMA ribbon aligned bearish (20<50<200)")
 
         structure_tfs = [tf for tf in (Timeframe.H1, Timeframe.H4) if tf in analyses] or [primary]
-        per_tf = 12.0 / len(structure_tfs)
+        per_tf = 10.0 / len(structure_tfs)
         for tf in structure_tfs:
             s = analyses[tf].structure
             if s.msb_bullish:
@@ -128,29 +138,29 @@ class DecisionEngine:
         notes: list[str] = []
         for tf, ta in analyses.items():
             if ta.hidden_div_bullish:
-                bull += 15.0 * weights[tf]
+                bull += 12.0 * weights[tf]
                 notes.append(f"▲ {tf.value} RSI hidden bullish divergence (price HL / RSI LL)")
             if ta.hidden_div_bearish:
-                bear += 15.0 * weights[tf]
+                bear += 12.0 * weights[tf]
                 notes.append(f"▼ {tf.value} RSI hidden bearish divergence (price LH / RSI HH)")
 
         p = analyses.get(primary) or next(iter(analyses.values()))
         if p.bb_squeeze and p.volume_expansion:
             if p.last_bar_bullish:
-                bull += 10.0
+                bull += 8.0
                 notes.append(f"▲ {p.timeframe.value} BB squeeze (BBW {p.bbw:.3f}) + volume {p.volume_ratio:.1f}x, bullish bar")
             else:
-                bear += 10.0
+                bear += 8.0
                 notes.append(f"▼ {p.timeframe.value} BB squeeze (BBW {p.bbw:.3f}) + volume {p.volume_ratio:.1f}x, bearish bar")
         elif p.volume_expansion:
             if p.last_bar_bullish:
-                bull += 4.0
+                bull += 3.0
             else:
-                bear += 4.0
+                bear += 3.0
             notes.append(f"• {p.timeframe.value} volume expansion {p.volume_ratio:.1f}x 20-SMA")
         elif p.bb_squeeze:
-            bull += 3.0
-            bear += 3.0
+            bull += 2.5
+            bear += 2.5
             notes.append(f"• {p.timeframe.value} BB squeeze (BBW {p.bbw:.3f}) — breakout pending, direction unknown")
 
         return _Bucket(BucketScore(key="momentum", name="Momentum & Volatility", max_points=MOMENTUM_MAX,
@@ -166,7 +176,7 @@ class DecisionEngine:
             if snap is None or snap.recommend_all is None:
                 continue
             r = snap.recommend_all
-            pts = 10.0 * _clamp(abs(r) / 0.5, 0, 1) * weights[tf]
+            pts = 7.5 * _clamp(abs(r) / 0.5, 0, 1) * weights[tf]
             if r > 0.1:
                 bull += pts
                 notes.append(f"▲ {tf.value} TradingView rating {snap.rating_label} ({r:+.2f})")
@@ -175,6 +185,77 @@ class DecisionEngine:
                 notes.append(f"▼ {tf.value} TradingView rating {snap.rating_label} ({r:+.2f})")
         return _Bucket(BucketScore(key="indicators", name="TradingView Indicators", max_points=INDICATORS_MAX,
                                    bullish=_clamp(bull, 0, INDICATORS_MAX), bearish=_clamp(bear, 0, INDICATORS_MAX), notes=notes))
+
+    def _institutional_bucket(self, analyses: dict[Timeframe, TimeframeAnalysis], primary: Timeframe) -> _Bucket:
+        """VWAP benchmark, liquidity sweeps, imbalances (FVG), order blocks, premium/discount — per TF, weighted."""
+        name = "Institutional Flow (VWAP / Liquidity / Imbalance)"
+        with_signals = {tf: ta for tf, ta in analyses.items() if ta.institutional is not None}
+        if not with_signals:
+            return _Bucket(BucketScore(key="institutional", name=name, max_points=INSTITUTIONAL_MAX, bullish=0, bearish=0,
+                                       available=False, notes=["• Institutional footprints unavailable (no candles)"]))
+        weights = self._tf_weights(primary, with_signals)
+        bull = bear = 0.0
+        notes: list[str] = []
+        for tf, ta in with_signals.items():
+            ins = ta.institutional
+            assert ins is not None
+            w = weights[tf]
+            close, atr_v = ta.close, ta.atr
+
+            above, rising = close > ins.vwap, ins.vwap_slope_pct > 0
+            if above and rising:
+                bull += 5.0 * w
+                notes.append(f"▲ {tf.value} above rising anchored VWAP ({ins.price_vs_vwap_pct:+.2f}%)")
+            elif not above and not rising:
+                bear += 5.0 * w
+                notes.append(f"▼ {tf.value} below falling anchored VWAP ({ins.price_vs_vwap_pct:+.2f}%)")
+            elif above:
+                bull += 2.5 * w
+            else:
+                bear += 2.5 * w
+
+            if ins.sweep_bullish_level is not None:
+                bull += 6.0 * w
+                notes.append(f"▲ {tf.value} liquidity sweep: stops below {_fmt(ins.sweep_bullish_level)} taken, closed back above")
+            if ins.sweep_bearish_level is not None:
+                bear += 6.0 * w
+                notes.append(f"▼ {tf.value} liquidity sweep: stops above {_fmt(ins.sweep_bearish_level)} taken, closed back below")
+
+            fvg = ins.fvg_bullish
+            if fvg is not None:
+                near = fvg.contains(close) or 0 <= close - fvg.high <= 1.5 * atr_v
+                bull += (4.0 if near else 1.0) * w
+                if near:
+                    notes.append(f"▲ {tf.value} price at bullish imbalance {_fmt(fvg.low)}–{_fmt(fvg.high)}{' (tested)' if fvg.tested else ''}")
+            fvg = ins.fvg_bearish
+            if fvg is not None:
+                near = fvg.contains(close) or 0 <= fvg.low - close <= 1.5 * atr_v
+                bear += (4.0 if near else 1.0) * w
+                if near:
+                    notes.append(f"▼ {tf.value} price at bearish imbalance {_fmt(fvg.low)}–{_fmt(fvg.high)}{' (tested)' if fvg.tested else ''}")
+
+            ob = ins.order_block_bullish
+            if ob is not None:
+                near = ob.contains(close) or 0 <= close - ob.high <= 1.0 * atr_v
+                bull += (3.0 if near else 1.0) * w
+                if near:
+                    notes.append(f"▲ {tf.value} retesting bullish order block {_fmt(ob.low)}–{_fmt(ob.high)}")
+            ob = ins.order_block_bearish
+            if ob is not None:
+                near = ob.contains(close) or 0 <= ob.low - close <= 1.0 * atr_v
+                bear += (3.0 if near else 1.0) * w
+                if near:
+                    notes.append(f"▼ {tf.value} retesting bearish order block {_fmt(ob.low)}–{_fmt(ob.high)}")
+
+            if ins.in_discount:
+                bull += 2.0 * w
+                notes.append(f"▲ {tf.value} in discount ({ins.range_position_pct:.0f}% of dealing range)")
+            elif ins.in_premium:
+                bear += 2.0 * w
+                notes.append(f"▼ {tf.value} in premium ({ins.range_position_pct:.0f}% of dealing range)")
+
+        return _Bucket(BucketScore(key="institutional", name=name, max_points=INSTITUTIONAL_MAX,
+                                   bullish=_clamp(bull, 0, INSTITUTIONAL_MAX), bearish=_clamp(bear, 0, INSTITUTIONAL_MAX), notes=notes))
 
     def _onchain_bucket(self, oc: OnChainSnapshot | None) -> _Bucket:
         mode = self._s.nansen_mode
@@ -296,13 +377,16 @@ class DecisionEngine:
 
     # ------------------------------------------------------------------ levels
     def _levels(self, side: Side, p: TimeframeAnalysis) -> Levels | None:
-        entry, atr_v, s = p.close, p.atr, p.structure
+        entry, atr_v, s, ins = p.close, p.atr, p.structure, p.institutional
         mult = self._s.atr_multiplier
         if atr_v <= 0 or entry <= 0:
             return None
         if side is Side.BUY:
             swing = s.last_swing_low if s.last_swing_low is not None and s.last_swing_low < entry else None
-            if swing is not None:
+            sweep = ins.sweep_bullish_level if ins is not None and ins.sweep_bullish_level is not None and ins.sweep_bullish_level < entry else None
+            if sweep is not None and entry - (sweep - 0.5 * atr_v) >= 0.5 * atr_v:
+                sl, basis = sweep - 0.5 * atr_v, "below swept liquidity − 0.5×ATR"
+            elif swing is not None:
                 sl, basis = swing - mult * atr_v, f"swing low − {mult:g}×ATR"
             else:
                 sl, basis = entry - 2.0 * atr_v, "entry − 2×ATR (no swing low)"
@@ -310,11 +394,18 @@ class DecisionEngine:
                 sl, basis = entry - mult * atr_v, f"entry − {mult:g}×ATR"
             risk = entry - sl
             tps = [entry + risk * k for k in TP_MULTIPLES]
-            target = s.last_swing_high if s.last_swing_high is not None and s.last_swing_high > entry else None
+            candidates = [s.last_swing_high] if s.last_swing_high is not None else []
+            if ins is not None:
+                candidates += ins.equal_highs
+            above = [c for c in candidates if c > entry]
+            target = min(above) if above else None
             rrr_struct = (target - entry) / risk if target is not None else None
         else:
             swing = s.last_swing_high if s.last_swing_high is not None and s.last_swing_high > entry else None
-            if swing is not None:
+            sweep = ins.sweep_bearish_level if ins is not None and ins.sweep_bearish_level is not None and ins.sweep_bearish_level > entry else None
+            if sweep is not None and (sweep + 0.5 * atr_v) - entry >= 0.5 * atr_v:
+                sl, basis = sweep + 0.5 * atr_v, "above swept liquidity + 0.5×ATR"
+            elif swing is not None:
                 sl, basis = swing + mult * atr_v, f"swing high + {mult:g}×ATR"
             else:
                 sl, basis = entry + 2.0 * atr_v, "entry + 2×ATR (no swing high)"
@@ -322,7 +413,11 @@ class DecisionEngine:
                 sl, basis = entry + mult * atr_v, f"entry + {mult:g}×ATR"
             risk = sl - entry
             tps = [entry - risk * k for k in TP_MULTIPLES]
-            target = s.last_swing_low if s.last_swing_low is not None and s.last_swing_low < entry else None
+            candidates = [s.last_swing_low] if s.last_swing_low is not None else []
+            if ins is not None:
+                candidates += ins.equal_lows
+            below = [c for c in candidates if c < entry]
+            target = max(below) if below else None
             rrr_struct = (entry - target) / risk if target is not None else None
         if risk <= 0:
             return None
@@ -363,6 +458,7 @@ class DecisionEngine:
 
         trend = self._trend_bucket(analyses, primary)
         momentum = self._momentum_bucket(analyses, primary)
+        institutional = self._institutional_bucket(analyses, primary)
         indicators = self._indicators_bucket(analyses, primary)
         context = self._onchain_bucket(inputs.onchain) if inputs.asset.is_crypto \
             else self._stock_context_bucket(p, inputs.relative_strength)
@@ -384,7 +480,7 @@ class DecisionEngine:
         execution = BucketScore(key="execution", name="Execution Risk (ATR SL / RRR)", max_points=EXECUTION_MAX,
                                 bullish=long_exec, bearish=short_exec, notes=[])
 
-        buckets = [trend.score, momentum.score, indicators.score, context.score, execution]
+        buckets = [trend.score, momentum.score, institutional.score, indicators.score, context.score, execution]
         total_max = sum(b.max_points for b in buckets if b.available) or 1.0
         bull_score = round(sum(b.bullish for b in buckets if b.available) / total_max * 100.0, 1)
         bear_score = round(sum(b.bearish for b in buckets if b.available) / total_max * 100.0, 1)
@@ -401,7 +497,7 @@ class DecisionEngine:
         vetoes: list[str] = []
         cautions: list[str] = []
         levels: Levels | None = None
-        parts = (trend, momentum, indicators, context)
+        parts = (trend, momentum, institutional, indicators, context)
         if direction is Side.BUY:
             levels = long_levels
             vetoes = [v for b in parts for v in b.veto_long] + long_exec_veto
@@ -416,6 +512,10 @@ class DecisionEngine:
             vetoes += self._regime_vetoes(direction, analyses, primary)
             if p.degraded:
                 vetoes.append(f"{primary.value} analysis is snapshot-only (no candles) — no structure or divergence confirmation")
+            if self._s.session_filter and primary in _INTRADAY:
+                hour = time.gmtime(now_ms / 1000).tm_hour
+                if not any(lo <= hour < hi for lo, hi in _KILL_ZONES_UTC):
+                    cautions.append(f"Outside London/NY kill zones (UTC 07–10, 12–15; now {hour:02d}h) — thinner institutional participation")
 
         signal = Signal.NEUTRAL
         if direction is not None:
@@ -459,6 +559,7 @@ class DecisionEngine:
             pine_alerts=inputs.alerts[:10],
             onchain=inputs.onchain,
             relative_strength=inputs.relative_strength,
+            institutional=p.institutional,
             timeframes_analyzed=list(analyses.keys()),
             errors=inputs.errors,
         )

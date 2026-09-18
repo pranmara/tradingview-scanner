@@ -100,6 +100,31 @@ def format_report(r: ConfluenceReport) -> str:
         if oc.top_holder_concentration_pct is not None:
             parts.append(f"Top-10 holders: {oc.top_holder_concentration_pct:.1f}%")
         lines += ["", f"<b>On-chain ({e(oc.chain)})</b>", " · ".join(parts)]
+    if r.institutional is not None:
+        ins = r.institutional
+        ins_lines = [f"VWAP {fmt_price(ins.vwap)} ({e(ins.vwap_anchor)}) · price {ins.price_vs_vwap_pct:+.2f}% · slope {'↑' if ins.vwap_slope_pct > 0 else '↓'}"]
+        if ins.sweep_bullish_level is not None:
+            ins_lines.append(f"Liquidity sweep ▲ below {fmt_price(ins.sweep_bullish_level)}")
+        if ins.sweep_bearish_level is not None:
+            ins_lines.append(f"Liquidity sweep ▼ above {fmt_price(ins.sweep_bearish_level)}")
+        zones = []
+        if ins.fvg_bullish is not None:
+            zones.append(f"FVG▲ {fmt_price(ins.fvg_bullish.low)}–{fmt_price(ins.fvg_bullish.high)}")
+        if ins.fvg_bearish is not None:
+            zones.append(f"FVG▼ {fmt_price(ins.fvg_bearish.low)}–{fmt_price(ins.fvg_bearish.high)}")
+        if ins.order_block_bullish is not None:
+            zones.append(f"OB▲ {fmt_price(ins.order_block_bullish.low)}–{fmt_price(ins.order_block_bullish.high)}")
+        if ins.order_block_bearish is not None:
+            zones.append(f"OB▼ {fmt_price(ins.order_block_bearish.low)}–{fmt_price(ins.order_block_bearish.high)}")
+        if zones:
+            ins_lines.append(" · ".join(zones))
+        if ins.range_position_pct is not None:
+            pos = "discount" if ins.in_discount else "premium" if ins.in_premium else "equilibrium"
+            ins_lines.append(f"Dealing range {fmt_price(ins.range_low or 0)}–{fmt_price(ins.range_high or 0)} · {ins.range_position_pct:.0f}% ({pos})")
+        pools = [fmt_price(x) for x in ins.equal_highs[:2]] + [fmt_price(x) for x in ins.equal_lows[-2:]]
+        if pools:
+            ins_lines.append("Liquidity pools: " + ", ".join(pools))
+        lines += ["", f"<b>Institutional ({r.primary_timeframe.value})</b>"] + ins_lines
     if r.relative_strength is not None:
         rs = r.relative_strength
         lines += ["", f"<b>Relative strength</b> vs {e(rs.benchmark)}: {rs.asset_return_pct:+.2f}% vs {rs.benchmark_return_pct:+.2f}% ({rs.delta_pct:+.2f}%)"]

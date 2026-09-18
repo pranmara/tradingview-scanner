@@ -97,6 +97,7 @@ class Settings(BaseSettings):
     htf_bias_filter: bool = True
     min_adx: float = 20.0
     rsi_overextended: float = 75.0
+    session_filter: bool = True  # caution (not veto) for intraday scans outside London/NY kill zones (UTC 07-10, 12-15)
 
     # Risk management (position sizing shown when account_equity > 0)
     account_equity: float = 0.0

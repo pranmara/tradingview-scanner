@@ -76,9 +76,10 @@ TradingView-derived evidence carries **90 points**; on-chain is an optional 10.
 
 | Bucket | Max | Inputs |
 |---|---|---|
-| Trend & Structure | 30 | EMA 20/50/200 ribbon per TF (primary weighted 50 %, others 25 %); MSB / CHoCH on 1h & 4h |
-| Momentum & Volatility | 30 | Hidden RSI divergence per TF; BB squeeze (BBW < 0.05) + volume > 1.5× 20-SMA |
-| TradingView Indicators | 20 | TradingView `Recommend.All` rating per TF (≤ 10) + your custom indicators (alerts & account studies) via `config/custom_indicators.json` |
+| Trend & Structure | 25 | EMA 20/50/200 ribbon per TF (primary weighted 50 %, others 25 %); MSB / CHoCH on 1h & 4h |
+| Momentum & Volatility | 20 | Hidden RSI divergence per TF; BB squeeze (BBW < 0.05) + volume > 1.5× 20-SMA |
+| Institutional Flow | 20 | Anchored VWAP bias, liquidity-sweep reversal, fair-value-gap proximity, order-block retest, premium/discount (README → *Institutional playbook*). Also sharpens stops (beyond swept liquidity) and targets (liquidity pools) |
+| TradingView Indicators | 15 | TradingView `Recommend.All` rating per TF (≤ 7.5) + your custom indicators (alerts & account studies) via `config/custom_indicators.json` |
 | Context — crypto | 10 | Nansen: SM 24h netflow (4), exchange netflow (4), top-10 holder change (2); `NANSEN_MODE` decides veto vs caution |
 | Context — stock | 10 | Volume-profile position vs POC / value area (5); 20-bar return vs sector ETF or SPY (5) |
 | Execution Risk | 10 | RRR at TP2 vs `MIN_RRR`; 0 if stop distance > `MAX_STOP_DISTANCE_PCT` |
@@ -149,6 +150,7 @@ All settings live in `/opt/tradingview-scanner/.env` (`chmod 600`). After editin
 | `HTF_BIAS_FILTER` | true | No trades against the next-higher timeframe ribbon |
 | `MIN_ADX` | 20 | Chop filter on the primary TF |
 | `RSI_OVEREXTENDED` | 75 | No BUY above / SELL below (100 − value) |
+| `SESSION_FILTER` | true | Intraday scans (≤ 1h) outside London/NY kill zones (UTC 07–10, 12–15) get a caution |
 | `ACCOUNT_EQUITY`, `RISK_PER_TRADE_PCT` | 0 / 1.0 | Position sizing (shown when equity > 0) |
 | `CANDLE_LIMIT` | 300 | Bars per timeframe |
 | `BENCHMARK_SYMBOL` | SPY | Fallback benchmark when sector is unknown |

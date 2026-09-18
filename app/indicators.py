@@ -238,6 +238,9 @@ def analyze_timeframe(df: pd.DataFrame, timeframe: Timeframe, source: str) -> Ti
     vol_ratio = float(df["volume"].iloc[-1]) / last_vol_sma if last_vol_sma > 0 else 0.0
     div_bull, div_bear = hidden_divergence(rsi_s, pivots, n)
 
+    from app.institutional import analyze_institutional  # local import: institutional depends on Pivot from this module
+
+    atr_last = float(atr_s.iloc[-1])
     return TimeframeAnalysis(
         timeframe=timeframe,
         bars=n,
@@ -253,11 +256,12 @@ def analyze_timeframe(df: pd.DataFrame, timeframe: Timeframe, source: str) -> Ti
         bb_squeeze=last_bbw < 0.05,
         volume_ratio=vol_ratio,
         volume_expansion=vol_ratio > 1.5,
-        atr=float(atr_s.iloc[-1]),
+        atr=atr_last,
         structure=market_structure(df, pivots),
         hidden_div_bullish=div_bull,
         hidden_div_bearish=div_bear,
         volume_profile=volume_profile(df),
+        institutional=analyze_institutional(df, pivots, atr_last),
         return_20_pct=return_pct(close),
         last_bar_bullish=float(close.iloc[-1]) >= float(df["open"].iloc[-1]),
     )

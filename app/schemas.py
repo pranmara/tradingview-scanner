@@ -110,6 +110,51 @@ class VolumeProfile(BaseModel):
     val: float
 
 
+class Zone(BaseModel):
+    low: float
+    high: float
+    index: int
+    kind: Literal["fvg", "order_block"]
+    tested: bool = False
+
+    def contains(self, price: float) -> bool:
+        return self.low <= price <= self.high
+
+    @property
+    def mid(self) -> float:
+        return (self.low + self.high) / 2.0
+
+
+class InstitutionalSignals(BaseModel):
+    """Footprints of institutional execution derived from OHLCV: VWAP benchmark, liquidity sweeps, imbalances, order blocks."""
+
+    vwap: float
+    vwap_anchor: str
+    vwap_slope_pct: float
+    vwap_upper_2: float
+    vwap_lower_2: float
+    price_vs_vwap_pct: float
+    sweep_bullish_level: float | None = None
+    sweep_bearish_level: float | None = None
+    fvg_bullish: Zone | None = None
+    fvg_bearish: Zone | None = None
+    order_block_bullish: Zone | None = None
+    order_block_bearish: Zone | None = None
+    equal_highs: list[float] = Field(default_factory=list)
+    equal_lows: list[float] = Field(default_factory=list)
+    range_low: float | None = None
+    range_high: float | None = None
+    range_position_pct: float | None = None
+
+    @property
+    def in_discount(self) -> bool:
+        return self.range_position_pct is not None and self.range_position_pct < 40.0
+
+    @property
+    def in_premium(self) -> bool:
+        return self.range_position_pct is not None and self.range_position_pct > 60.0
+
+
 class TimeframeAnalysis(BaseModel):
     timeframe: Timeframe
     bars: int
@@ -130,6 +175,7 @@ class TimeframeAnalysis(BaseModel):
     hidden_div_bullish: bool
     hidden_div_bearish: bool
     volume_profile: VolumeProfile | None = None
+    institutional: InstitutionalSignals | None = None
     return_20_pct: float | None = None
     last_bar_bullish: bool
     snapshot: TechnicalSnapshot | None = None
@@ -286,6 +332,7 @@ class ConfluenceReport(BaseModel):
     pine_alerts: list[PineAlert] = Field(default_factory=list)
     onchain: OnChainSnapshot | None = None
     relative_strength: RelativeStrength | None = None
+    institutional: InstitutionalSignals | None = None
     timeframes_analyzed: list[Timeframe] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

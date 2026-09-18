@@ -16,9 +16,10 @@ TradingView-derived evidence carries **90 of 100 points**; on-chain data is an o
 
 | Bucket | Weight | Inputs |
 |---|---|---|
-| Trend & Structure | 30 | EMA 20/50/200 ribbon per TF (primary 50 %, others 25 %); MSB / CHoCH on 1h & 4h |
-| Momentum & Volatility | 30 | Hidden RSI divergence per TF; BBW < 0.05 squeeze + volume > 1.5× 20-SMA |
-| TradingView Indicators | 20 | TradingView's technical rating (`Recommend.All`) per TF (≤ 10) + your custom Pine indicators via alerts or account studies (default bucket for `custom_indicators.json`) |
+| Trend & Structure | 25 | EMA 20/50/200 ribbon per TF (primary 50 %, others 25 %); MSB / CHoCH on 1h & 4h |
+| Momentum & Volatility | 20 | Hidden RSI divergence per TF; BBW < 0.05 squeeze + volume > 1.5× 20-SMA |
+| Institutional Flow | 20 | Anchored VWAP bias (5), liquidity sweep reversal (6), fair-value-gap proximity (4), order-block retest (3), premium/discount positioning (2) — see *Institutional playbook* |
+| TradingView Indicators | 15 | TradingView's technical rating (`Recommend.All`) per TF (≤ 7.5) + your custom Pine indicators via alerts or account studies (default bucket for `custom_indicators.json`) |
 | Context: On-chain (crypto) | 10 | Nansen, `NANSEN_MODE=off\|advisory\|strict`. Advisory (default) adds points and *cautions* only; strict turns negative SM netflow / heavy exchange inflow into hard vetoes |
 | Context: Volume Profile & RS (stocks) | 10 | Price vs POC / value area; 20-bar return vs sector ETF (or SPY) |
 | Execution Risk | 10 | SL = swing ± 1.5×ATR; RRR at TP2 ≥ 2.5; stop distance ≤ 8 % |
@@ -43,6 +44,22 @@ The matrix scores *evidence*; the gates below are hard vetoes that keep a high s
 | Fixed-fractional sizing (`ACCOUNT_EQUITY`, `RISK_PER_TRADE_PCT=1`) | 1 % | Size = risk ÷ (entry − SL). Losing streaks of 8–10 are normal for a 40 % win-rate system; 1 % keeps a 10-loss streak at ~10 % drawdown. |
 | Management plan | scale-out | 40 % at TP1 and SL → breakeven, 30 % at TP2 and SL → TP1, 30 % at TP3. Locks in R early while keeping a runner; also what the backtester simulates (`--exit-mode scaled`). |
 | Time stop (`BACKTEST_TIME_STOP_BARS=40`) | 40 bars | A setup that hasn't moved in 40 bars has lost its catalyst; capital is better redeployed. |
+
+### Institutional playbook (what "market maker / smart money" logic is actually in the code)
+
+Real market making — quoting both sides, earning the spread, managing inventory with colocated infrastructure — is not a signal and cannot be replicated by a scanner. What *can* be measured from candles is the footprint large participants leave when they execute, and that is what the Institutional Flow bucket encodes (`app/institutional.py`):
+
+| Footprint | Detection | How it's used |
+|---|---|---|
+| **Anchored VWAP** | VWAP from the most recent major swing (highest high / lowest low in 120 bars) with volume-weighted σ bands | Institutions benchmark fills to VWAP: price above a rising VWAP = buyers in control (5 pts); ±2σ bands shown as mean-reversion extremes |
+| **Liquidity sweep** | A bar that trades beyond the prior swing low/high but closes back inside | Resting stops were taken and rejected — the classic stop-hunt reversal (6 pts). The stop is then placed 0.5×ATR beyond the swept level, which is where the liquidity *was*, usually tighter than swing − 1.5×ATR |
+| **Fair value gap (imbalance)** | Three-candle gap between candle 1's high and candle 3's low (or inverse), not yet traded through | Unfilled imbalances get revisited; price at/near one in trend direction is an entry zone (4 pts), elsewhere 1 pt |
+| **Order block** | Last opposing candle before an impulse ≥ 1.5×ATR that broke the candle's high/low, not invalidated | Retest of the zone institutions defended (3 pts near, 1 pt exists) |
+| **Premium / discount** | Position inside the dealing range formed by recent swing highs/lows | Below 40 % = discount (favours longs, 2 pts); above 60 % = premium (favours shorts) |
+| **Liquidity pools** | Clusters of equal highs / equal lows within 0.2×ATR | Used as the *structural target* when nearer than the last swing — price gravitates to resting orders |
+| **Kill zones** | London 07–10 UTC, New York 12–15 UTC (`SESSION_FILTER`) | Intraday scans outside these windows get a caution, not a veto — participation, not direction |
+
+Backtests include all of this automatically (no look-ahead: every detector uses bars ≤ the current one). Whether it adds edge on *your* instruments is an empirical question — read the calibration table.
 
 Things that are deliberately **not** in the score: news, funding rates, order-book data, and sentiment. They are useful but need separate feeds; if you add them, treat them as vetoes first and points second.
 
