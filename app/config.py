@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Published TradingView alert webhook egress IPs.
@@ -110,6 +110,16 @@ class Settings(BaseSettings):
     backtest_fee_bps: float = 10.0
     backtest_slippage_bps: float = 5.0
     backtest_time_stop_bars: int = 40
+
+    @field_validator(
+        "tv_webhook_hmac_key", "tv_mcp_url", "tv_session_id", "tv_session_id_sign", "tv_username", "tv_password",
+        "twelvedata_api_key", "nansen_api_key", "execution_webhook_url", "execution_hmac_key",
+        mode="before",
+    )
+    @classmethod
+    def _empty_is_unset(cls, v: object) -> object:
+        # `KEY=` lines in .env arrive as "" — treat them as not configured.
+        return None if isinstance(v, str) and not v.strip() else v
 
     @property
     def allowed_user_ids(self) -> frozenset[int]:
