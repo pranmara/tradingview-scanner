@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     tv_scanner_default_stock_exchanges: str = "NASDAQ,NYSE,AMEX"
     tv_scanner_default_crypto_exchange: str = "BINANCE"
 
+    # Crypto candle fallback when a token is not listed on Binance (spot first, then the linear perp)
+    bybit_enabled: bool = True
+    bybit_base_url: str = "https://api.bybit.com"
+
     # Optional keyed stock candle source (used before Yahoo when set)
     twelvedata_api_key: SecretStr | None = None
 

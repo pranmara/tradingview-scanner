@@ -1,10 +1,11 @@
 # TradingView Scanner & Signal Validator
 
-24/7 Telegram-driven chart scanner. `/scan BTCUSDT 4h` pulls 1h/4h/1d market data (TradingView MCP → Binance/Yahoo fallbacks), enriches crypto with Nansen smart-money flows, scores the setup on a 0–100 Confluence Matrix, computes ATR-based SL / TP1–3, and optionally forwards an HMAC-signed payload to an execution engine. A FastAPI gateway ingests Pine Script alerts that feed into scoring.
+24/7 Telegram-driven chart scanner. `/scan BTCUSDT 4h` pulls 1h/4h/1d market data (TradingView MCP → Binance/Bybit/Yahoo fallbacks), enriches crypto with Nansen smart-money flows, scores the setup on a 0–100 Confluence Matrix, computes ATR-based SL / TP1–3, and optionally forwards an HMAC-signed payload to an execution engine. A FastAPI gateway ingests Pine Script alerts that feed into scoring.
 
 ```
 Telegram /scan ──► Orchestrator ──┬─► TradingView MCP ─┐
-                                  ├─► Binance / Yahoo ─┼─► indicators ─► Decision Engine ─► Telegram report
+                                  ├─► Binance→Bybit /  ─┼─► indicators ─► Decision Engine ─► Telegram report
+                                  │   Yahoo            │
                                   ├─► TV scanner REST ─┘        ▲              │
                                   └─► Nansen REST (crypto)      │              └─► Execution webhook (signed, gated)
 Pine alert ──► POST /webhooks/tradingview ──► alert store ──────┘
@@ -297,6 +298,8 @@ Without a domain: `docker compose up -d --build` (base file only) runs bot + Red
 | Backup | `tar czf scanner-backup.tgz /opt/tradingview-scanner/.env /opt/tradingview-scanner/data` |
 | Backtest on the server | `docker compose exec app python -m app.backtest BTCUSDT --tf 4h --bars 1500` |
 | See every TypeSafe request | `docker compose logs -f app \| grep '"msg": "typesafe call"'` |
+
+**Crypto candle sources.** Binance first, then Bybit for anything Binance does not list — Bybit spot, then the linear perpetual, since a new token often trades as a perp long before it gets a spot pair. Both are public endpoints needing no key, and the report's *Sources* line names which one answered (`bybit-spot`, `bybit-linear`). `/status` shows both. Set `BYBIT_ENABLED=false` to pin it to Binance only.
 
 Security notes: `.env` is `chmod 600`; the app port is bound to loopback and only `/webhooks/tradingview` + `/healthz` are proxied; the container runs as a non-root user; Caddy renews certificates automatically; keep `TV_WEBHOOK_ENFORCE_IP_ALLOWLIST=true` (Caddy passes the real client IP and the overlay sets `TV_WEBHOOK_TRUST_PROXY=true`).
 

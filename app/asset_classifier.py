@@ -44,11 +44,16 @@ class AssetInfo:
         return self.asset_class is AssetClass.CRYPTO
 
     @property
-    def binance_symbol(self) -> str:
+    def pair_symbol(self) -> str:
+        """BASE+QUOTE as centralised venues write it; USD-ish quotes normalise to USDT. Binance and Bybit agree."""
         quote = self.quote or "USDT"
         if quote in {"USD", "USDC", "BUSD", "FDUSD", "TUSD"}:
             quote = "USDT"
         return f"{self.base}{quote}"
+
+    @property
+    def binance_symbol(self) -> str:
+        return self.pair_symbol
 
     @property
     def yahoo_symbol(self) -> str:

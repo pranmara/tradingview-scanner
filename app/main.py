@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from app.alert_store import AlertStore
 from app.asset_resolver import build_resolver
 from app.clients.binance import BinanceClient
+from app.clients.bybit import BybitClient
 from app.clients.market_data import CompositeMarketDataProvider
 from app.clients.nansen import NansenClient
 from app.clients.tradingview_mcp import TradingViewMCPClient
@@ -77,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     market = CompositeMarketDataProvider(
         settings,
         binance=BinanceClient(http),
+        bybit=BybitClient(http, settings.bybit_base_url) if settings.bybit_enabled else None,
         yahoo=YahooClient(http),
         scanner=TradingViewScannerClient(http, settings.tv_scanner_stock_market),
         mcp=mcp,

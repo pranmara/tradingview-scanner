@@ -12,6 +12,16 @@ BINANCE_INTERVAL: dict[Timeframe, str] = {
     Timeframe.W1: "1w",
 }
 
+BYBIT_INTERVAL: dict[Timeframe, str] = {
+    Timeframe.M5: "5",
+    Timeframe.M15: "15",
+    Timeframe.M30: "30",
+    Timeframe.H1: "60",
+    Timeframe.H4: "240",
+    Timeframe.D1: "D",
+    Timeframe.W1: "W",
+}
+
 # (yahoo interval, yahoo range, resample factor)
 YAHOO_FETCH: dict[Timeframe, tuple[str, str, int]] = {
     Timeframe.M5: ("5m", "60d", 1),
