@@ -16,7 +16,10 @@ from app.clients.tradingview_mcp import TradingViewMCPClient
 from app.clients.tradingview_scanner import TradingViewScannerClient
 from app.clients.tradingview_ws import TradingViewSessionClient
 from app.clients.twelvedata import TwelveDataClient
+from app.clients.typesafe import aclose as close_typesafe
+from app.clients.typesafe import build_client as build_typesafe
 from app.clients.yahoo import YahooClient
+from app.command_router import build_router
 from app.config import get_settings
 from app.custom_indicators import CustomIndicatorRules
 from app.decision_engine import DecisionEngine
@@ -89,7 +92,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     alert_store = AlertStore(redis, settings.tv_alert_ttl_seconds)
     rules = CustomIndicatorRules.load(settings.custom_indicators_path)
     studies = StudyRegistry(settings.tv_studies_active_path, settings.tv_studies_path)
-    advisor = build_advisor(settings)
+    typesafe = build_typesafe(settings)
+    advisor = build_advisor(settings, typesafe)
+    nl_router = build_router(settings, typesafe)
     orchestrator = ScanOrchestrator(
         settings, market, nansen, alert_store, DecisionEngine(settings, rules), ExecutionRouter(settings, http),
         journal=SignalJournal(settings.signal_journal_path), tv_session=tv_session, studies=studies,
@@ -100,7 +105,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.orchestrator = orchestrator
 
     telegram = build_application(settings, orchestrator, market, alert_store, nansen, tv_session=tv_session, studies=studies,
-                                 advisor=advisor)
+                                 advisor=advisor, router=nl_router)
     await telegram.initialize()
     await telegram.start()
     assert telegram.updater is not None
@@ -109,7 +114,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "service started",
         extra={
             "mcp": bool(mcp), "redis": redis is not None, "nansen": f"{settings.nansen_mode}/{'key' if nansen.enabled else 'no-key'}",
-            "tv_session": tv_session is not None, "tv_studies": sorted(studies.active()), "typesafe": advisor is not None,
+            "tv_session": tv_session is not None, "tv_studies": sorted(studies.active()),
+            "typesafe": f"autoconfig={advisor is not None} natural_language={nl_router is not None}",
             "execution": "live" if settings.execution_live else ("dry-run" if settings.execution_enabled else "disabled"),
             "allowed_users": len(settings.allowed_user_ids), "custom_indicator_rules": rules.names,
         },
@@ -123,8 +129,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if telegram.running:
             await telegram.stop()
         await telegram.shutdown()
-        if advisor is not None:
-            await advisor.aclose()
+        await close_typesafe(typesafe)
         if redis is not None:
             await redis.aclose()
         await http.aclose()

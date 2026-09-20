@@ -90,6 +90,32 @@ Rules for trusting a backtest:
 - **Costs matter**: `--fee-bps 10 --slippage-bps 5` is a taker on a major exchange; use your real numbers. Illiquid alts need 20–50 bps.
 - **Forward-test before live**: every live BUY/SELL/WATCH is appended to `data/signals.jsonl`. After a few weeks run `python -m app.backtest --journal data/signals.jsonl` — it fetches the candles that arrived after each signal and reports realised R. Live results diverging from backtest is the earliest warning that a data source or filter is misbehaving.
 
+## Asking in plain English (TypeSafe / Jev)
+
+`/scan BTCUSDT 4h` is parsed in code and always will be — it is the fast path and never touches a model. Set `TYPESAFE_API_KEY` and everything that strict form has to *reject* gets a second chance:
+
+```
+/scan is btc worth a long on the 4h
+🤖 Reading that as BTCUSDT 4h.
+🔍 Starting scan...
+
+what do you make of NVDA daily          ← no slash needed
+🤖 Reading that as NVDA 1d.
+```
+
+`app/command_router.py` sends one request with four questions evaluated in parallel — the intent (`scan` / `status` / `indicators` / `help` / `other`), the timeframe, which listed cryptocurrency is meant, and which **word from your message** is the instrument — plus a yes/no on whether you named a company rather than a ticker. The argument questions are speculative: they are asked every time and ignored when the intent turns out not to be a scan.
+
+The symbol is *selected, never generated*. The options are the words that actually appear in your message, so the model cannot introduce a ticker you did not type; spoken crypto names resolve through the same closed list `app/asset_classifier.py` already uses. Stocks are resolved by ticker only — ask about "apple" and it will tell you to use `AAPL` rather than guess.
+
+| | |
+|---|---|
+| **When it runs** | Only when `/scan TICKER [TF]` does not parse, or on a plain message. Never inside a scan's scoring, never in the backtester. |
+| **Timeframe** | Defaults to 4h when you do not say, or when the answer is below `TYPESAFE_MIN_CONFIDENCE`. |
+| **When it declines** | Low confidence, a ticker that is not in your message, a company name with no ticker, or any API failure — all reply with the usage text instead of scanning something you did not ask for. |
+| **Turning it off** | `TYPESAFE_NATURAL_LANGUAGE=false` or no key. The plain-message handler is not even registered, so the bot stays silent on non-commands. |
+
+Only authorised users (`TELEGRAM_ALLOWED_USER_IDS`) are routed, and the usual `TELEGRAM_SCAN_COOLDOWN_SECONDS` applies to whatever the router decides to run.
+
 ## Connecting your TradingView account
 
 TradingView has no official API for chart or indicator data, so there are two routes:

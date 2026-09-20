@@ -111,6 +111,7 @@ class Settings(BaseSettings):
     # or the backtester: it runs once per add, and an outage just restores the manual plot=/above=/below= flags.
     typesafe_api_key: SecretStr | None = None
     typesafe_autoconfig: bool = True
+    typesafe_natural_language: bool = True
     typesafe_model: str | None = None
     typesafe_min_confidence: float = 0.55
     typesafe_timeout_seconds: float = 10.0

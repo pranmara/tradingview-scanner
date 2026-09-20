@@ -5,15 +5,17 @@ import logging
 import time
 from typing import Any
 
-from telegram import Update
+from telegram import Message, Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from app.alert_store import AlertStore
+from app.asset_classifier import classify
 from app.clients.market_data import CompositeMarketDataProvider
 from app.clients.nansen import NansenClient
 from app.clients.tradingview_ws import ScriptInfo, TradingViewSessionClient
+from app.command_router import CommandRouter
 from app.config import Settings
 from app.orchestrator import ScanError, ScanOrchestrator
 from app.schemas import ConfluenceReport, Side, Signal, Timeframe
@@ -28,7 +30,9 @@ _USAGE = (
     "<code>/scan &lt;TICKER&gt; [TIMEFRAME]</code>\n"
     "Examples: <code>/scan BTCUSDT 4h</code>, <code>/scan AAPL 1d</code>, <code>/scan BINANCE:SOLUSDT 1w</code>\n"
     f"Timeframes: {SUPPORTED_LABEL} (default 4h)\n"
-    "Prefix <code>crypto:</code> / <code>stock:</code> to force asset class.\n\n"
+    "Prefix <code>crypto:</code> / <code>stock:</code> to force asset class.\n"
+    "With TYPESAFE_API_KEY set you can also just ask: <i>is btc worth a long on the 4h</i> — "
+    "plain messages work too, no slash needed.\n\n"
     "<b>Account indicators</b> (needs TV_SESSION_ID)\n"
     "<code>/indicators</code> — list scripts on your TradingView account\n"
     "<code>/indicators add &lt;n|pine_id&gt; [plot=plot_0 above=0 below=0 points=5 bucket=indicators age=2 in.Length=20]</code>\n"
@@ -46,6 +50,20 @@ def fmt_price(p: float) -> str:
     if p >= 1:
         return f"{p:,.4f}".rstrip("0").rstrip(".")
     return f"{p:.6g}"
+
+
+def strict_scan_args(args: list[str]) -> tuple[str, Timeframe] | None:
+    """The exact `/scan TICKER [TF]` form. Parsed in code and never sent to a model — this is the fast path."""
+    if not args or len(args) > 2:
+        return None
+    try:
+        classify(args[0])
+    except ValueError:
+        return None
+    if len(args) == 1:
+        return args[0], Timeframe.H4
+    tf = parse_timeframe(args[1])
+    return (args[0], tf) if tf is not None else None
 
 
 def _bar(score: float) -> str:
@@ -160,6 +178,7 @@ def build_application(
     tv_session: TradingViewSessionClient | None = None,
     studies: StudyRegistry | None = None,
     advisor: StudyAdvisor | None = None,
+    router: CommandRouter | None = None,
 ) -> Application:
     allowed = settings.allowed_user_ids
     last_scan: dict[int, float] = {}
@@ -194,32 +213,12 @@ def build_application(
         if update.effective_message:
             await update.effective_message.reply_text(_USAGE, parse_mode=ParseMode.HTML)
 
-    async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        msg = update.effective_message
-        user = update.effective_user
-        if msg is None or user is None:
-            return
-        if not authorised(update):
-            await msg.reply_text(f"⛔ Not authorised (your user id: {user.id}).")
-            return
-        args = context.args or []
-        if not args:
-            await msg.reply_text(_USAGE, parse_mode=ParseMode.HTML)
-            return
-        symbol = args[0]
-        timeframe = Timeframe.H4
-        if len(args) > 1:
-            parsed = parse_timeframe(args[1])
-            if parsed is None:
-                await msg.reply_text(f"Invalid timeframe. Use one of: {SUPPORTED_LABEL}")
-                return
-            timeframe = parsed
-
+    async def _run_scan(msg: Message, user_id: int, symbol: str, timeframe: Timeframe) -> None:
         now = time.monotonic()
-        if now - last_scan.get(user.id, 0.0) < settings.telegram_scan_cooldown_seconds:
+        if now - last_scan.get(user_id, 0.0) < settings.telegram_scan_cooldown_seconds:
             await msg.reply_text(f"⏳ Please wait {settings.telegram_scan_cooldown_seconds}s between scans.")
             return
-        last_scan[user.id] = now
+        last_scan[user_id] = now
 
         status_msg = await msg.reply_text("🔍 Starting scan...")
 
@@ -235,7 +234,7 @@ def build_application(
             await status_msg.edit_text(f"❌ {html.escape(str(exc))}", parse_mode=ParseMode.HTML)
             return
         except Exception:
-            logger.exception("scan crashed", extra={"symbol": symbol, "user_id": user.id})
+            logger.exception("scan crashed", extra={"symbol": symbol, "user_id": user_id})
             await status_msg.edit_text("❌ Scan failed due to an internal error. Check server logs.")
             return
 
@@ -247,10 +246,74 @@ def build_application(
                 f"{report.symbol} {report.primary_timeframe.value}: {report.signal.value} score {report.score:.0f}/100"
             )
 
-    async def cmd_status(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
-        msg = update.effective_message
-        if msg is None or not authorised(update):
+    async def _route_free_text(msg: Message, user_id: int, text: str) -> None:
+        """Everything a strict parser had to reject: one request decides the command and its arguments."""
+        assert router is not None
+        thinking = await msg.reply_text("🤖 Working out what you meant...")
+        route = await router.route(text)
+        logger.info("routed free text", extra={"intent": route.intent, "confidence": route.confidence,
+                                               "symbol": route.symbol, "user_id": user_id})
+
+        if route.scannable and route.symbol is not None:
+            tf = route.timeframe or Timeframe.H4
+            await thinking.edit_text(f"🤖 Reading that as <code>{html.escape(route.symbol)} {tf.value}</code>.",
+                                     parse_mode=ParseMode.HTML)
+            await _run_scan(msg, user_id, route.symbol, tf)
             return
+
+        if route.intent == "status":
+            await thinking.edit_text(await _status_text(), parse_mode=ParseMode.HTML)
+            return
+        if route.intent == "indicators":
+            await thinking.edit_text("Use <code>/indicators</code> to list, add, or remove account scripts.",
+                                     parse_mode=ParseMode.HTML)
+            return
+        if route.intent == "scan":
+            hint = route.note or "I could not tell which instrument you meant."
+            await thinking.edit_text(f"🤔 {html.escape(hint)}\nTry <code>/scan BTCUSDT 4h</code>.",
+                                     parse_mode=ParseMode.HTML)
+            return
+        if route.intent in ("unsure", "unavailable", "other"):
+            lead = {"unsure": "🤔 I'm not sure what you meant.",
+                    "unavailable": "🤔 Natural language is unavailable right now.",
+                    "other": "🤔 I only analyse charts."}[route.intent]
+            await thinking.edit_text(f"{lead}\n\n{_USAGE}", parse_mode=ParseMode.HTML)
+            return
+        await thinking.edit_text(_USAGE, parse_mode=ParseMode.HTML)
+
+    async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        msg = update.effective_message
+        user = update.effective_user
+        if msg is None or user is None:
+            return
+        if not authorised(update):
+            await msg.reply_text(f"⛔ Not authorised (your user id: {user.id}).")
+            return
+        args = context.args or []
+
+        strict = strict_scan_args(args)
+        if strict is not None:
+            await _run_scan(msg, user.id, *strict)
+            return
+        if args and router is not None and router.enabled:
+            await _route_free_text(msg, user.id, " ".join(args))
+            return
+        if len(args) > 1 and parse_timeframe(args[1]) is None:
+            await msg.reply_text(f"Invalid timeframe. Use one of: {SUPPORTED_LABEL}")
+            return
+        await msg.reply_text(_USAGE, parse_mode=ParseMode.HTML)
+
+    async def cmd_text(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        """Plain messages, no slash. Silent unless the sender is authorised and routing is available."""
+        msg = update.effective_message
+        user = update.effective_user
+        if msg is None or user is None or not msg.text or not authorised(update):
+            return
+        if router is None or not router.enabled:
+            return
+        await _route_free_text(msg, user.id, msg.text)
+
+    async def _status_text() -> str:
         health = await market.health()
         redis_ok = await alert_store.ping()
         exec_mode = "LIVE" if settings.execution_live else ("dry-run" if settings.execution_enabled else "disabled")
@@ -258,10 +321,17 @@ def build_application(
         lines += [
             f"redis: {'ok' if redis_ok else 'down'}",
             f"nansen: {settings.nansen_mode} ({'key set' if nansen.enabled else 'no api key'})",
-            f"typesafe: {'on' if advisor is not None and advisor.enabled else 'off'} (auto-configures /indicators add)",
+            f"typesafe: autoconfig {'on' if advisor is not None and advisor.enabled else 'off'} · "
+            f"natural language {'on' if router is not None and router.enabled else 'off'}",
             f"execution: {exec_mode}",
         ]
-        await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        return "\n".join(lines)
+
+    async def cmd_status(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        msg = update.effective_message
+        if msg is None or not authorised(update):
+            return
+        await msg.reply_text(await _status_text(), parse_mode=ParseMode.HTML)
 
     async def cmd_indicators(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         msg = update.effective_message
@@ -368,4 +438,6 @@ def build_application(
     application.add_handler(CommandHandler("scan", cmd_scan))
     application.add_handler(CommandHandler("status", cmd_status))
     application.add_handler(CommandHandler("indicators", cmd_indicators))
+    if router is not None and router.enabled:
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cmd_text))
     return application

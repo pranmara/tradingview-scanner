@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, get_args
 
 from app.clients.tradingview_ws import ScriptInfo, StudyResult
+from app.clients.typesafe import build_client
 from app.custom_indicators import Bucket
 
 logger = logging.getLogger(__name__)
@@ -184,14 +185,6 @@ class StudyAdvisor:
     def enabled(self) -> bool:
         return self._client is not None
 
-    async def aclose(self) -> None:
-        closer = getattr(self._client, "aclose", None) or getattr(self._client, "close", None)
-        if closer is not None:
-            try:
-                await closer()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("typesafe client close failed", extra={"error": str(exc)})
-
     async def suggest(
         self,
         script: ScriptInfo,
@@ -348,20 +341,13 @@ class StudyAdvisor:
         return WEIGHT_LEVELS[idx].split(":")[0].strip().lower()
 
 
-def build_advisor(settings: Any) -> StudyAdvisor | None:
+def build_advisor(settings: Any, client: Any | None = None) -> StudyAdvisor | None:
     """None when auto-configuration is off; a disabled advisor is never constructed."""
     if not settings.typesafe_active:
         return None
-    try:
-        from typesafe_sdk import AsyncTypeSafeClient
-    except ImportError:
-        logger.warning("TYPESAFE_API_KEY is set but typesafe-sdk is not installed; auto-configuration disabled")
+    client = client if client is not None else build_client(settings)
+    if client is None:
         return None
-    client = AsyncTypeSafeClient(
-        api_key=settings.typesafe_api_key.get_secret_value(),
-        model=settings.typesafe_model,
-        timeout=settings.typesafe_timeout_seconds,
-    )
     return StudyAdvisor(client, min_confidence=settings.typesafe_min_confidence, model=settings.typesafe_model)
 
 
