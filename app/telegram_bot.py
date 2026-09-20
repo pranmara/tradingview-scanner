@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import logging
 import time
+from typing import Any
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -12,10 +13,11 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from app.alert_store import AlertStore
 from app.clients.market_data import CompositeMarketDataProvider
 from app.clients.nansen import NansenClient
-from app.clients.tradingview_ws import TradingViewSessionClient
+from app.clients.tradingview_ws import ScriptInfo, TradingViewSessionClient
 from app.config import Settings
 from app.orchestrator import ScanError, ScanOrchestrator
 from app.schemas import ConfluenceReport, Side, Signal, Timeframe
+from app.study_advisor import Advice, StudyAdvisor
 from app.study_registry import StudyRegistry, parse_kv
 from app.timeframes import SUPPORTED_LABEL, parse_timeframe
 
@@ -30,6 +32,8 @@ _USAGE = (
     "<b>Account indicators</b> (needs TV_SESSION_ID)\n"
     "<code>/indicators</code> — list scripts on your TradingView account\n"
     "<code>/indicators add &lt;n|pine_id&gt; [plot=plot_0 above=0 below=0 points=5 bucket=indicators age=2 in.Length=20]</code>\n"
+    "With TYPESAFE_API_KEY set, <code>add</code> picks bucket / plot / thresholds / points from the script itself; "
+    "any flag you pass still wins, and <code>auto=off</code> skips it.\n"
     "<code>/indicators active</code> · <code>/indicators remove &lt;name&gt;</code> · <code>/indicators clear</code>\n\n"
     "<code>/status</code> — upstream health"
 )
@@ -155,6 +159,7 @@ def build_application(
     nansen: NansenClient,
     tv_session: TradingViewSessionClient | None = None,
     studies: StudyRegistry | None = None,
+    advisor: StudyAdvisor | None = None,
 ) -> Application:
     allowed = settings.allowed_user_ids
     last_scan: dict[int, float] = {}
@@ -162,6 +167,28 @@ def build_application(
     def authorised(update: Update) -> bool:
         user = update.effective_user
         return user is not None and user.id in allowed
+
+    async def _advise(script: ScriptInfo, inputs: dict[str, Any]) -> Advice | None:
+        """Gather what the script says about itself, then let TypeSafe pick the bucket, plot and thresholds."""
+        if advisor is None or tv_session is None:
+            return None
+        meta: dict[str, Any] | None = None
+        study = None
+        try:
+            meta = await tv_session.translate_pine(script.pine_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("pine metadata unavailable for advice", extra={"script": script.name, "error": str(exc)})
+        probe_tf = parse_timeframe(settings.typesafe_probe_timeframe) or Timeframe.H4
+        try:
+            study = await tv_session.get_study(
+                settings.typesafe_probe_symbol, probe_tf, script.pine_id, inputs, settings.typesafe_probe_bars
+            )
+        except Exception as exc:  # noqa: BLE001 - values sharpen the judgment but metadata alone is enough
+            logger.info("study probe failed; advising from metadata only",
+                        extra={"script": script.name, "symbol": settings.typesafe_probe_symbol, "error": str(exc)})
+        if meta is None and study is None:
+            return Advice(reason="Could not read the script from TradingView — kept manual defaults.")
+        return await advisor.suggest(script, meta=meta, study=study)
 
     async def cmd_help(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         if update.effective_message:
@@ -231,6 +258,7 @@ def build_application(
         lines += [
             f"redis: {'ok' if redis_ok else 'down'}",
             f"nansen: {settings.nansen_mode} ({'key set' if nansen.enabled else 'no api key'})",
+            f"typesafe: {'on' if advisor is not None and advisor.enabled else 'off'} (auto-configures /indicators add)",
             f"execution: {exec_mode}",
         ]
         await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
@@ -280,25 +308,48 @@ def build_application(
 
         if sub == "add":
             if len(args) < 2:
-                await msg.reply_text("Usage: /indicators add <n|pine_id> [plot=… above=… below=… points=… bucket=… age=… in.Input=value]")
+                await msg.reply_text("Usage: /indicators add <n|pine_id> [plot=… above=… below=… points=… bucket=… age=… auto=off in.Input=value]")
                 return
             script = studies.resolve(args[1])
             if script is None:
                 await msg.reply_text("Unknown indicator. Run /indicators first, then use its number, or pass a pine id like USER;abc123.")
                 return
             rule_opts, inputs = parse_kv(args[2:])
+
+            # Auto-configuration only fills what the user left unspecified; any explicit flag wins.
+            wants_auto = str(rule_opts.get("auto", "on")).lower() not in ("off", "false", "0", "no")
+            manual = {"plot", "above", "below"} & rule_opts.keys()
+            advice: Advice | None = None
+            progress = None
+            if wants_auto and not manual and advisor is not None and advisor.enabled:
+                progress = await msg.reply_text("🤖 Reading the script's metadata and asking TypeSafe how to score it...")
+                advice = await _advise(script, inputs)
+                if advice is not None and advice.rule_opts is not None:
+                    rule_opts = {**advice.rule_opts, **rule_opts}
+
             try:
                 name, rule = studies.add(script, rule_opts, inputs, alias=str(rule_opts.get("as")) if "as" in rule_opts else None)
             except (ValueError, TypeError) as exc:
-                await msg.reply_text(f"❌ Invalid option: {html.escape(str(exc))}")
+                text = f"❌ Invalid option: {html.escape(str(exc))}"
+                await (progress.edit_text(text) if progress is not None else msg.reply_text(text))
                 return
-            note = "" if "plot" in rule_opts else "\nDefaulted to plot_0 with 0 as the bull/bear threshold — adjust with plot=/above=/below= if this is an oscillator around 50, etc."
-            await msg.reply_text(
+
+            lines = [
                 f"✅ Activated <b>{html.escape(name)}</b> → {rule.bucket} bucket, {rule.points:g} pts, "
-                f"{rule.value} &gt; {rule.bullish_above:g} bullish / &lt; {rule.bearish_below:g} bearish.{html.escape(note)}\n"
-                "It will be pulled on every /scan.",
-                parse_mode=ParseMode.HTML,
-            )
+                f"{rule.value} &gt; {rule.bullish_above:g} bullish / &lt; {rule.bearish_below:g} bearish."
+            ]
+            if advice is not None:
+                lines.append(f"🤖 {html.escape(advice.reason)}")
+                lines += [f"• {html.escape(d)}" for d in advice.details]
+            if not (advice is not None and advice.applied) and "plot" not in rule_opts:
+                lines.append(
+                    "Defaulted to plot_0 with 0 as the bull/bear threshold — adjust with plot=/above=/below= "
+                    "if this is an oscillator around 50, etc."
+                )
+            lines.append("It will be pulled on every /scan.")
+            text = "\n".join(lines)
+            await (progress.edit_text(text, parse_mode=ParseMode.HTML) if progress is not None
+                   else msg.reply_text(text, parse_mode=ParseMode.HTML))
             return
 
         if sub == "remove" and len(args) > 1:

@@ -119,6 +119,30 @@ Selecting indicators from Telegram (once `TV_SESSION_ID` is set):
 
 The selection persists in `data/tv_studies_active.json` (seeded from `config/tv_studies.json`). Every `/scan` fetches each active study on the primary timeframe and scores it through the same rule engine as webhook alerts; the report lists them under *Pine alerts* and `tv-session-studies` in *Sources*. Pine ids can also be read from a script's URL (`PUB;…`, `USER;…`) or the `pine-facade/translate/...` request in the browser network tab. Study inputs are matched by their Pine `input()` title (`in.Length=20`).
 
+### Auto-configuring an indicator (TypeSafe / Jev)
+
+Picking `plot=`, `above=` and `below=` by hand is the one thing `/indicators add` could never do for you: nothing in the payload says whether a script prints a MACD-style histogram around zero, an RSI-style 0–100 oscillator, or a SuperTrend line in dollars. Set `TYPESAFE_API_KEY` and `add` works it out from the script itself:
+
+```
+/indicators add 3                   # no flags needed
+🤖 TypeSafe configured this automatically (86% confidence).
+• bucket momentum (91%)
+• zero_centred on Momentum (86%) → bullish > 0, bearish < 0
+• 8 pts — strong evidence
+```
+
+`app/study_advisor.py` pulls the script's pine-facade metadata, probes ~120 bars of it on `TYPESAFE_PROBE_SYMBOL` to see what its plots actually print, and asks [TypeSafe](https://docs.typesafe.ai) four questions in one request: which confluence bucket it belongs to, which plot carries the directional signal, what kind of number that plot produces, and how much weight the evidence deserves. The model judges *semantics only* — code derives the actual thresholds from the observed values, so a plot the model called "0–100" that printed 64,000 is rejected rather than misconfigured.
+
+It is deliberately confined:
+
+| | |
+|---|---|
+| **When it runs** | Once, on `/indicators add`. Never during `/scan`, never in the backtester — scoring stays deterministic and reproducible. |
+| **What overrides it** | Any flag you pass (`plot=`, `above=`, `points=`, `bucket=`…). `auto=off` skips it entirely; `TYPESAFE_AUTOCONFIG=false` or no key disables it. |
+| **When it declines** | Confidence below `TYPESAFE_MIN_CONFIDENCE` (0.55), a price-overlay plot, an answer the observed values contradict, or any API failure. All of these fall back to today's `plot_0` / `0` / `0` defaults and say why. |
+
+`/status` reports whether it is on.
+
 Caveats: this is not an API TradingView offers; it can stop working after a TradingView release, the session cookie is a full-access credential (rotate it, never commit it), and heavy use may get the account rate-limited. Route A is the one to build on; Route B is for indicators whose alerts can't express the values you need.
 
 ## Custom TradingView indicators

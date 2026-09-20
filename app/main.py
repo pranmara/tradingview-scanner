@@ -24,6 +24,7 @@ from app.execution_router import ExecutionRouter
 from app.logging_config import setup_logging
 from app.orchestrator import ScanOrchestrator
 from app.signal_journal import SignalJournal
+from app.study_advisor import build_advisor
 from app.study_registry import StudyRegistry
 from app.telegram_bot import build_application
 from app.tradingview_webhook import router as webhook_router
@@ -88,6 +89,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     alert_store = AlertStore(redis, settings.tv_alert_ttl_seconds)
     rules = CustomIndicatorRules.load(settings.custom_indicators_path)
     studies = StudyRegistry(settings.tv_studies_active_path, settings.tv_studies_path)
+    advisor = build_advisor(settings)
     orchestrator = ScanOrchestrator(
         settings, market, nansen, alert_store, DecisionEngine(settings, rules), ExecutionRouter(settings, http),
         journal=SignalJournal(settings.signal_journal_path), tv_session=tv_session, studies=studies,
@@ -97,7 +99,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.alert_store = alert_store
     app.state.orchestrator = orchestrator
 
-    telegram = build_application(settings, orchestrator, market, alert_store, nansen, tv_session=tv_session, studies=studies)
+    telegram = build_application(settings, orchestrator, market, alert_store, nansen, tv_session=tv_session, studies=studies,
+                                 advisor=advisor)
     await telegram.initialize()
     await telegram.start()
     assert telegram.updater is not None
@@ -106,7 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "service started",
         extra={
             "mcp": bool(mcp), "redis": redis is not None, "nansen": f"{settings.nansen_mode}/{'key' if nansen.enabled else 'no-key'}",
-            "tv_session": tv_session is not None, "tv_studies": sorted(studies.active()),
+            "tv_session": tv_session is not None, "tv_studies": sorted(studies.active()), "typesafe": advisor is not None,
             "execution": "live" if settings.execution_live else ("dry-run" if settings.execution_enabled else "disabled"),
             "allowed_users": len(settings.allowed_user_ids), "custom_indicator_rules": rules.names,
         },
@@ -120,6 +123,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if telegram.running:
             await telegram.stop()
         await telegram.shutdown()
+        if advisor is not None:
+            await advisor.aclose()
         if redis is not None:
             await redis.aclose()
         await http.aclose()

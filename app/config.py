@@ -107,6 +107,17 @@ class Settings(BaseSettings):
     custom_indicators_path: str = "config/custom_indicators.json"
     signal_journal_path: str = "data/signals.jsonl"
 
+    # TypeSafe (Jev) — auto-configures `/indicators add` from a script's own metadata. Never touches scan scoring
+    # or the backtester: it runs once per add, and an outage just restores the manual plot=/above=/below= flags.
+    typesafe_api_key: SecretStr | None = None
+    typesafe_autoconfig: bool = True
+    typesafe_model: str | None = None
+    typesafe_min_confidence: float = 0.55
+    typesafe_timeout_seconds: float = 10.0
+    typesafe_probe_symbol: str = "BINANCE:BTCUSDT"
+    typesafe_probe_timeframe: str = "4h"
+    typesafe_probe_bars: int = 120
+
     # Backtest defaults
     backtest_fee_bps: float = 10.0
     backtest_slippage_bps: float = 5.0
@@ -115,6 +126,7 @@ class Settings(BaseSettings):
     @field_validator(
         "tv_webhook_hmac_key", "tv_mcp_url", "tv_session_id", "tv_session_id_sign", "tv_username", "tv_password",
         "twelvedata_api_key", "nansen_api_key", "execution_webhook_url", "execution_hmac_key",
+        "typesafe_api_key", "typesafe_model",
         mode="before",
     )
     @classmethod
@@ -142,6 +154,10 @@ class Settings(BaseSettings):
     @property
     def nansen_active(self) -> bool:
         return self.nansen_mode != "off" and self.nansen_api_key is not None
+
+    @property
+    def typesafe_active(self) -> bool:
+        return self.typesafe_autoconfig and self.typesafe_api_key is not None
 
     @property
     def execution_live(self) -> bool:

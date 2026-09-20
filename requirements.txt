@@ -10,3 +10,4 @@ numpy==2.5.3
 pandas==3.0.6
 mcp==2.2.0
 websockets==17.1
+typesafe-sdk==0.7.0
