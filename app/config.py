@@ -138,8 +138,12 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _empty_is_unset(cls, v: object) -> object:
-        # `KEY=` lines in .env arrive as "" — treat them as not configured.
-        return None if isinstance(v, str) and not v.strip() else v
+        # `KEY=` lines in .env arrive as "" — treat them as not configured. Docker Compose's env_file parser
+        # hands back the trailing comment as the value when the value itself is blank (`KEY=   # note`), which
+        # is indistinguishable from unset for every field here, and is never a legitimate secret or URL.
+        if isinstance(v, str) and (not v.strip() or v.lstrip().startswith("#")):
+            return None
+        return v
 
     @property
     def allowed_user_ids(self) -> frozenset[int]:
