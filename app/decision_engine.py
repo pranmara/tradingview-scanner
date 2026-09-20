@@ -168,15 +168,18 @@ class DecisionEngine:
         return _Bucket(BucketScore(key="momentum", name="Momentum & Volatility", max_points=MOMENTUM_MAX,
                                    bullish=_clamp(bull, 0, MOMENTUM_MAX), bearish=_clamp(bear, 0, MOMENTUM_MAX), notes=notes))
 
-    def _indicators_bucket(self, analyses: dict[Timeframe, TimeframeAnalysis], primary: Timeframe) -> _Bucket:
+    def _indicators_bucket(self, analyses: dict[Timeframe, TimeframeAnalysis], primary: Timeframe,
+                           has_pine: bool = False) -> _Bucket:
         """TradingView's own technical rating (Recommend.All) per timeframe; custom Pine contributions land here too."""
         weights = self._tf_weights(primary, analyses)
         bull = bear = 0.0
+        rated = False
         notes: list[str] = []
         for tf, ta in analyses.items():
             snap = ta.snapshot
             if snap is None or snap.recommend_all is None:
                 continue
+            rated = True
             r = snap.recommend_all
             pts = 7.5 * _clamp(abs(r) / 0.5, 0, 1) * weights[tf]
             if r > 0.1:
@@ -185,8 +188,14 @@ class DecisionEngine:
             elif r < -0.1:
                 bear += pts
                 notes.append(f"▼ {tf.value} TradingView rating {snap.rating_label} ({r:+.2f})")
+        # With neither a rating nor a Pine reading the bucket has no evidence at all, so it drops out of the
+        # denominator exactly as the institutional and context buckets already do. Keeping it in was silently
+        # costing every score 15 points — which is why a backtest (never has snapshots) scored below a live scan.
+        if not rated and not has_pine:
+            notes.append("• No TradingView rating or Pine reading available")
         return _Bucket(BucketScore(key="indicators", name="TradingView Indicators", max_points=INDICATORS_MAX,
-                                   bullish=_clamp(bull, 0, INDICATORS_MAX), bearish=_clamp(bear, 0, INDICATORS_MAX), notes=notes))
+                                   bullish=_clamp(bull, 0, INDICATORS_MAX), bearish=_clamp(bear, 0, INDICATORS_MAX),
+                                   available=rated or has_pine, notes=notes))
 
     def _institutional_bucket(self, analyses: dict[Timeframe, TimeframeAnalysis], primary: Timeframe) -> _Bucket:
         """VWAP benchmark, liquidity sweeps, imbalances (FVG), order blocks, premium/discount — per TF, weighted."""
@@ -458,15 +467,19 @@ class DecisionEngine:
         p = analyses[primary]
         now_ms = inputs.now_ms if inputs.now_ms is not None else int(time.time() * 1000)
 
+        # Resolved before the buckets are built: a Pine contribution is evidence the indicators bucket exists.
+        contributions = list(self._rules.merged(inputs.extra_rules).contributions(inputs.alerts, now_ms))
+
         trend = self._trend_bucket(analyses, primary)
         momentum = self._momentum_bucket(analyses, primary)
         institutional = self._institutional_bucket(analyses, primary)
-        indicators = self._indicators_bucket(analyses, primary)
+        indicators = self._indicators_bucket(analyses, primary,
+                                             has_pine=any(c.bucket == "indicators" for c in contributions))
         context = self._onchain_bucket(inputs.onchain) if inputs.asset.is_crypto \
             else self._stock_context_bucket(p, inputs.relative_strength)
 
         by_key = {"trend": trend.score, "momentum": momentum.score, "indicators": indicators.score, "context": context.score}
-        for c in self._rules.merged(inputs.extra_rules).contributions(inputs.alerts, now_ms):
+        for c in contributions:
             b = by_key[c.bucket]
             if not b.available:
                 b.notes.append(f"• {c.note} ignored — {b.name} bucket unavailable")

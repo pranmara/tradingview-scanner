@@ -269,3 +269,47 @@ def test_bearish_alignment_yields_sell_direction(settings: Settings) -> None:
     assert report.direction is Side.SELL
     assert report.levels is not None and report.levels.stop_loss > report.levels.entry
     assert report.levels.stop_loss == 100.0 + 1.5 + 0.5 and "swept" in report.levels.stop_basis
+
+
+def _no_snapshots() -> dict[Timeframe, TimeframeAnalysis]:
+    """What a backtest always looks like: real candles, no TradingView rating."""
+    analyses = _all_bullish()
+    for ta in analyses.values():
+        ta.snapshot = None
+    return analyses
+
+
+def test_indicators_bucket_drops_out_when_there_is_no_rating(settings: Settings) -> None:
+    # Keeping an always-zero bucket in the denominator cost every backtest score 15 points.
+    report = DecisionEngine(settings).evaluate(
+        ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=_no_snapshots()))
+    ind = next(b for b in report.buckets if b.key == "indicators")
+    assert not ind.available
+    assert report.coverage_pct == 85
+
+
+def test_dropping_the_bucket_raises_the_score_rather_than_lowering_it(settings: Settings) -> None:
+    engine = DecisionEngine(settings)
+    rated = engine.evaluate(ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=_all_bullish()))
+    unrated = engine.evaluate(ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=_no_snapshots()))
+    # Same evidence, renormalised over 85 instead of diluted across 100.
+    assert unrated.score > rated.score
+
+
+def test_a_pine_reading_keeps_the_bucket_alive_without_a_rating(settings: Settings) -> None:
+    alert = PineAlert(ticker="BTCUSDT", timeframe="4h", indicator="Anything", signal=AlertSignal.BUY, price=100.0,
+                      received_at_ms=int(time.time() * 1000))
+    report = DecisionEngine(settings).evaluate(
+        ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=_no_snapshots(), alerts=[alert]))
+    ind = next(b for b in report.buckets if b.key == "indicators")
+    assert ind.available
+    assert ind.bullish == 5.0                       # the Pine contribution, not discarded
+    assert not any("ignored" in n for n in ind.notes)
+    assert report.coverage_pct == 100
+
+
+def test_a_rating_still_keeps_the_bucket_available(settings: Settings) -> None:
+    report = DecisionEngine(settings).evaluate(
+        ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=_all_bullish()))
+    ind = next(b for b in report.buckets if b.key == "indicators")
+    assert ind.available and report.coverage_pct == 100

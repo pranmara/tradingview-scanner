@@ -28,7 +28,7 @@ Bull and bear are scored independently; the dominant side becomes the direction.
 
 **Effective RRR:** TP1/TP2/TP3 are 1.5R / 2.5R / 4R. If the nearest opposing swing (structural target) sits closer than 2.5R, RRR is capped at that structural value — a stop 1.5×ATR beyond the swing often makes this the binding constraint, which is intentional.
 
-**Coverage:** if the on-chain bucket is unavailable (no Nansen key, unmapped token, API down) it is dropped and the score is renormalised over the remaining 70 points. The report shows `coverage 70%`.
+**Coverage:** a base bucket with no evidence at all is dropped from the denominator and the score is renormalised over what remains — the report shows `coverage 85%` and so on. This applies to *Institutional Flow* (no candles) and *TradingView Indicators* (no technical rating and no Pine reading, which is every backtest bar, since backtests have no snapshots). The on-chain and stock-context buckets are credits and never sit in the denominator at all, so Nansen being off can never lower coverage.
 
 ## Trading thesis & best-practice gates
 
