@@ -57,3 +57,32 @@ def test_metrics_and_calibration() -> None:
     obs = [Observation(0, 85, "BUY", "BUY", hit=True), Observation(1, 85, "BUY", "BUY", hit=False), Observation(2, 30, None, "NEUTRAL", hit=None)]
     cal = compute_calibration(obs)
     assert cal[-1]["samples"] == 2 and cal[-1]["hit_2_5r_pct"] == 50.0
+
+
+def test_backtest_provider_includes_the_bybit_fallback(settings) -> None:
+    """Without this a Bybit-only token cannot be backtested at all — get_ohlcv_history would only try Binance."""
+    import httpx
+
+    from app.backtest import backtest_provider
+
+    provider = backtest_provider(httpx.AsyncClient(), settings)
+    assert provider._bybit is not None  # noqa: SLF001
+
+
+def test_backtest_provider_honours_the_bybit_switch(settings) -> None:
+    import httpx
+
+    from app.backtest import backtest_provider
+
+    off = settings.model_copy(update={"bybit_enabled": False})
+    assert backtest_provider(httpx.AsyncClient(), off)._bybit is None  # noqa: SLF001
+
+
+def test_backtest_provider_uses_no_mcp_or_session_feed(settings) -> None:
+    """History must be reproducible, so the backtester deliberately skips the live-only sources."""
+    import httpx
+
+    from app.backtest import backtest_provider
+
+    provider = backtest_provider(httpx.AsyncClient(), settings)
+    assert provider._mcp is None and provider._tv_session is None  # noqa: SLF001

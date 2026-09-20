@@ -22,7 +22,7 @@ import os
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
@@ -32,6 +32,12 @@ from app.decision_engine import TP_MULTIPLES, DecisionEngine, ScanInputs
 from app.indicators import MIN_BARS, InsufficientDataError, analyze_timeframe, candles_to_frame
 from app.schemas import Side, Signal, Timeframe, TimeframeAnalysis
 from app.timeframes import BAR_MS, parse_timeframe
+
+if TYPE_CHECKING:  # heavy client imports stay deferred so the CLI starts fast
+    import httpx
+
+    from app.clients.market_data import CompositeMarketDataProvider
+    from app.config import Settings
 
 ExitMode = Literal["tp2", "scaled"]
 SCORE_BUCKETS = ((0, 40), (40, 60), (60, 80), (80, 101))
@@ -292,22 +298,33 @@ def evaluate_journal(path: str, frames_for: dict[tuple[str, str], pd.DataFrame],
 
 
 # ---------------------------------------------------------------------------- CLI
-async def _load_frames(asset: AssetInfo, primary: Timeframe, bars: int) -> dict[Timeframe, pd.DataFrame]:
-    import httpx
-
+def backtest_provider(http: httpx.AsyncClient, settings: Settings) -> CompositeMarketDataProvider:
+    """The candle sources a backtest may use: no MCP and no session feed, so history is reproducible, but the
+    same Binance/Bybit/Yahoo chain a live scan falls back to — otherwise a Bybit-only token cannot be tested."""
     from app.clients.binance import BinanceClient
+    from app.clients.bybit import BybitClient
     from app.clients.market_data import CompositeMarketDataProvider
     from app.clients.tradingview_scanner import TradingViewScannerClient
     from app.clients.twelvedata import TwelveDataClient
     from app.clients.yahoo import YahooClient
+
+    return CompositeMarketDataProvider(
+        settings, BinanceClient(http), YahooClient(http),
+        TradingViewScannerClient(http, settings.tv_scanner_stock_market),
+        twelvedata=TwelveDataClient(http, settings.twelvedata_api_key.get_secret_value())
+        if settings.twelvedata_api_key else None,
+        bybit=BybitClient(http, settings.bybit_base_url) if settings.bybit_enabled else None,
+    )
+
+
+async def _load_frames(asset: AssetInfo, primary: Timeframe, bars: int) -> dict[Timeframe, pd.DataFrame]:
+    import httpx
+
     from app.config import get_settings
 
     s = get_settings()
     async with httpx.AsyncClient(timeout=20.0, headers={"User-Agent": "tradingview-scanner-backtest/1.0"}, follow_redirects=True) as http:
-        market = CompositeMarketDataProvider(
-            s, BinanceClient(http), YahooClient(http), TradingViewScannerClient(http, s.tv_scanner_stock_market),
-            twelvedata=TwelveDataClient(http, s.twelvedata_api_key.get_secret_value()) if s.twelvedata_api_key else None,
-        )
+        market = backtest_provider(http, s)
         frames: dict[Timeframe, pd.DataFrame] = {}
         span_ms = None
         for tf in dict.fromkeys([primary, Timeframe.H1, Timeframe.H4, Timeframe.D1]):
