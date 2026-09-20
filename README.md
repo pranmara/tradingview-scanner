@@ -301,6 +301,8 @@ Without a domain: `docker compose up -d --build` (base file only) runs bot + Red
 
 **Crypto candle sources.** Binance first, then Bybit for anything Binance does not list — Bybit spot, then the linear perpetual, since a new token often trades as a perp long before it gets a spot pair. Both are public endpoints needing no key, and the report's *Sources* line names which one answered (`bybit-spot`, `bybit-linear`). `/status` shows both. Set `BYBIT_ENABLED=false` to pin it to Binance only.
 
+The same fallback applies to the TradingView *rating*: snapshots are requested as `BINANCE:XXXUSDT, BYBIT:XXXUSDT` and the earliest candidate that exists wins, so a Bybit-only token still scores its TradingView Indicators bucket instead of dropping it. Controlled by `TV_SCANNER_CRYPTO_EXCHANGE_FALLBACKS`; an explicit `BYBIT:` prefix on the ticker still pins to one venue.
+
 Security notes: `.env` is `chmod 600`; the app port is bound to loopback and only `/webhooks/tradingview` + `/healthz` are proxied; the container runs as a non-root user; Caddy renews certificates automatically; keep `TV_WEBHOOK_ENFORCE_IP_ALLOWLIST=true` (Caddy passes the real client IP and the overlay sets `TV_WEBHOOK_TRUST_PROXY=true`).
 
 - Find your Telegram user id by sending `/scan` once; the denial message prints it.

@@ -176,3 +176,47 @@ def test_binance_and_bybit_agree_on_the_pair_symbol():
         asset = classify(f"crypto:{raw}" if ":" not in raw else raw)
         assert asset.pair_symbol == asset.binance_symbol
         assert asset.pair_symbol.endswith(("USDT", "BTC", "ETH", "EUR", "BNB"))
+
+
+# ------------------------------------------------------------------ snapshot candidates
+def test_crypto_snapshot_candidates_include_the_fallback_exchange(settings) -> None:
+    tickers = classify("crypto:HYPE2").tradingview_symbols(("NASDAQ",), settings.crypto_exchange_candidates)
+    assert tickers == ["BINANCE:HYPE2USDT", "BYBIT:HYPE2USDT"]
+
+
+def test_crypto_candidates_are_ordered_and_deduplicated(settings) -> None:
+    s = settings.model_copy(update={"tv_scanner_default_crypto_exchange": "BYBIT",
+                                    "tv_scanner_crypto_exchange_fallbacks": "bybit, BINANCE"})
+    assert s.crypto_exchange_candidates == ("BYBIT", "BINANCE")
+
+
+def test_an_explicit_exchange_prefix_still_pins_to_one(settings) -> None:
+    asset = classify("BYBIT:XYZUSDT")
+    assert asset.tradingview_symbols(("NASDAQ",), settings.crypto_exchange_candidates) == ["BYBIT:XYZUSDT"]
+
+
+def test_the_scanner_prefers_the_earliest_candidate_we_asked_for() -> None:
+    """TradingView returns only what it recognises, in its own order."""
+    from app.clients.tradingview_scanner import TradingViewScannerClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Bybit row first, Binance second — our preference must still win.
+        return httpx.Response(200, json={"data": [
+            {"s": "BYBIT:BTCUSDT", "d": [2.0] * 12},
+            {"s": "BINANCE:BTCUSDT", "d": [1.0] * 12},
+        ]})
+
+    client = TradingViewScannerClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    snap = run(client.get_snapshot(["BINANCE:BTCUSDT", "BYBIT:BTCUSDT"], Timeframe.H1, True))
+    assert snap is not None and snap.symbol == "BINANCE:BTCUSDT"
+
+
+def test_the_scanner_uses_the_fallback_when_the_first_choice_is_absent() -> None:
+    from app.clients.tradingview_scanner import TradingViewScannerClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"s": "BYBIT:HYPEUSDT", "d": [2.0] * 12}]})
+
+    client = TradingViewScannerClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    snap = run(client.get_snapshot(["BINANCE:HYPEUSDT", "BYBIT:HYPEUSDT"], Timeframe.H1, True))
+    assert snap is not None and snap.symbol == "BYBIT:HYPEUSDT"

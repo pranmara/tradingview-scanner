@@ -61,11 +61,12 @@ class AssetInfo:
             return f"{self.base}-USD"
         return self.base.replace(".", "-")
 
-    def tradingview_symbols(self, stock_exchanges: tuple[str, ...], crypto_exchange: str) -> list[str]:
+    def tradingview_symbols(self, stock_exchanges: tuple[str, ...], crypto_exchanges: tuple[str, ...]) -> list[str]:
+        """Candidates in preference order. An explicit exchange prefix pins it to one."""
         if self.exchange:
             return [f"{self.exchange}:{self.symbol}"]
         if self.is_crypto:
-            return [f"{crypto_exchange}:{self.binance_symbol}"]
+            return [f"{ex}:{self.pair_symbol}" for ex in crypto_exchanges]
         return [f"{ex}:{self.symbol}" for ex in stock_exchanges]
 
 

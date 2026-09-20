@@ -39,7 +39,10 @@ class TradingViewScannerClient:
         rows = resp.json().get("data") or []
         if not rows:
             return None
-        row = rows[0]
+        # TradingView only returns the tickers it recognises, and not necessarily in the order asked. Pick the
+        # earliest candidate we requested so BINANCE beats BYBIT (and NASDAQ beats NYSE) when a symbol is on both.
+        order = {t.upper(): i for i, t in enumerate(tickers)}
+        row = min(rows, key=lambda r: order.get(str(r.get("s", "")).upper(), len(order)))
         values = dict(zip(columns, row.get("d") or [], strict=False))
 
         def g(name: str) -> float | None:

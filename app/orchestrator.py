@@ -204,7 +204,7 @@ class ScanOrchestrator:
 
     async def _fetch_studies(self, asset: AssetInfo, tf: Timeframe, studies: dict[str, dict[str, Any]], errors: list[str]) -> list[PineAlert]:
         assert self._tv_session is not None
-        ticker = asset.tradingview_symbols(self._s.stock_exchange_candidates, self._s.tv_scanner_default_crypto_exchange)[0]
+        ticker = asset.tradingview_symbols(self._s.stock_exchange_candidates, self._s.crypto_exchange_candidates)[0]
 
         async def one(name: str, spec: dict[str, Any]) -> PineAlert | None:
             try:

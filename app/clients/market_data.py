@@ -44,7 +44,7 @@ class CompositeMarketDataProvider:
 
     def _tv_symbols(self, asset: AssetInfo) -> list[str]:
         return asset.tradingview_symbols(
-            self._settings.stock_exchange_candidates, self._settings.tv_scanner_default_crypto_exchange
+            self._settings.stock_exchange_candidates, self._settings.crypto_exchange_candidates
         )
 
     async def get_ohlcv(self, asset: AssetInfo, timeframe: Timeframe, limit: int) -> OHLCV:

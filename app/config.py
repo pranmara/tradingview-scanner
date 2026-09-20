@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     tv_scanner_stock_market: str = "america"
     tv_scanner_default_stock_exchanges: str = "NASDAQ,NYSE,AMEX"
     tv_scanner_default_crypto_exchange: str = "BINANCE"
+    tv_scanner_crypto_exchange_fallbacks: str = "BYBIT"  # tried when the default does not list the token
 
     # Crypto candle fallback when a token is not listed on Binance (spot first, then the linear perp)
     bybit_enabled: bool = True
@@ -161,6 +162,11 @@ class Settings(BaseSettings):
     @property
     def stock_exchange_candidates(self) -> tuple[str, ...]:
         return tuple(p.strip().upper() for p in self.tv_scanner_default_stock_exchanges.split(",") if p.strip())
+
+    @property
+    def crypto_exchange_candidates(self) -> tuple[str, ...]:
+        names = [self.tv_scanner_default_crypto_exchange, *self.tv_scanner_crypto_exchange_fallbacks.split(",")]
+        return tuple(dict.fromkeys(p.strip().upper() for p in names if p.strip()))
 
     @property
     def tv_session_configured(self) -> bool:
