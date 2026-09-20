@@ -137,6 +137,28 @@ Only authorised users (`TELEGRAM_ALLOWED_USER_IDS`) are routed, and the usual `T
 
 A side benefit: Pine alerts arriving as `HYPEUSDT` are stored under that symbol, so resolving `/scan HYPE` to `HYPEUSDT` also makes those alerts match, which they previously did not.
 
+### When an alert name does not match its rule
+
+`config/custom_indicators.json` maps a Pine alert's `indicator` name to a bucket and a point weight, and the lookup is an exact (lowercased) key match. An alert calling itself `SuperTrend V2` against a config key of `SuperTrend_V2` misses, falls back to `DEFAULT_RULE` — indicators bucket, 5 points — and says nothing about it. You get a plausible-looking score built on a rule you did not write.
+
+Two changes:
+
+**Every scan now reports the mismatch**, with or without a TypeSafe key:
+
+```
+⚠️ Partial data: pine alert 'SuperTrend V2' matches no rule in custom_indicators.json — scored with defaults
+```
+
+**With `TYPESAFE_API_KEY` set, the name is matched back to your rule.** `app/indicator_matcher.py` asks one question per unmatched name — all in a single request — offering your configured rule names plus `none_of_these`, and describing what each rule does (bucket, points, which value it reads) so the choice is about the indicator rather than the spelling.
+
+The matched rule is handed to the engine through the existing `ScanInputs.extra_rules`, keyed by the alert's own name, so `rule_for()` finds it on the next lookup. `DecisionEngine.evaluate()` is untouched and stays synchronous — which matters, because the backtester replays it bar by bar.
+
+| | |
+|---|---|
+| **When it runs** | Once per scan, only for alert names with no exact rule. An exact match never reaches the model. |
+| **Cost** | One request per scan regardless of how many names are unmatched (up to 8), cached per name for 30 days. The cache key includes a fingerprint of your rule set, so editing `custom_indicators.json` invalidates it. |
+| **When it declines** | `none_of_these`, a rule name that does not exist, confidence below `TYPESAFE_INDICATOR_MIN_CONFIDENCE` (0.7), or any API failure — all leave the alert on `DEFAULT_RULE` and report it as unmatched. |
+
 ## Connecting your TradingView account
 
 TradingView has no official API for chart or indicator data, so there are two routes:

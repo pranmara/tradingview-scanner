@@ -321,9 +321,12 @@ def build_application(
         lines += [
             f"redis: {'ok' if redis_ok else 'down'}",
             f"nansen: {settings.nansen_mode} ({'key set' if nansen.enabled else 'no api key'})",
-            f"typesafe: autoconfig {'on' if advisor is not None and advisor.enabled else 'off'} · "
-            f"natural language {'on' if router is not None and router.enabled else 'off'} · "
-            f"symbol resolution {'on' if settings.typesafe_active and settings.typesafe_symbol_resolution else 'off'}",
+            "typesafe: " + " · ".join(f"{name} {'on' if on else 'off'}" for name, on in {
+                "autoconfig": advisor is not None and advisor.enabled,
+                "natural language": router is not None and router.enabled,
+                "symbol resolution": settings.typesafe_active and settings.typesafe_symbol_resolution,
+                "indicator matching": settings.typesafe_active and settings.typesafe_indicator_matching,
+            }.items()),
             f"execution: {exec_mode}",
         ]
         return "\n".join(lines)

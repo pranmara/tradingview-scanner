@@ -14,8 +14,10 @@ from app.clients.market_data import CompositeMarketDataProvider
 from app.clients.nansen import NansenClient
 from app.clients.tradingview_ws import TradingViewSessionClient
 from app.config import Settings
+from app.custom_indicators import CustomIndicatorRules, IndicatorRule
 from app.decision_engine import DecisionEngine, ScanInputs
 from app.execution_router import ExecutionRouter
+from app.indicator_matcher import IndicatorMatcher
 from app.indicators import InsufficientDataError, analysis_from_snapshot, analyze_timeframe, candles_to_frame, return_pct
 from app.logging_config import scan_id_var
 from app.schemas import AlertSignal, ConfluenceReport, PineAlert, RelativeStrength, Signal, Timeframe, TimeframeAnalysis
@@ -65,6 +67,8 @@ class ScanOrchestrator:
         tv_session: TradingViewSessionClient | None = None,
         studies: StudyRegistry | None = None,
         resolver: AssetResolver | None = None,
+        rules: CustomIndicatorRules | None = None,
+        matcher: IndicatorMatcher | None = None,
     ) -> None:
         self._s = settings
         self._market = market
@@ -76,6 +80,8 @@ class ScanOrchestrator:
         self._tv_session = tv_session
         self._studies = studies
         self._resolver = resolver
+        self._rules = rules
+        self._matcher = matcher
 
     async def scan(self, raw_symbol: str, primary: Timeframe, on_status: StatusCallback | None = None) -> ConfluenceReport:
         token = scan_id_var.set(uuid.uuid4().hex[:12])
@@ -151,13 +157,15 @@ class ScanOrchestrator:
                 logger.warning("relative strength failed", extra={"symbol": asset.symbol, "error": str(exc)})
 
         alerts = study_alerts + await self._alerts.recent(asset.symbol, [tf.value for tf in timeframes])
+        extra_rules = self._studies.extra_rules() if self._studies is not None else {}
+        extra_rules.update(await self._match_indicators(alerts, extra_rules, errors))
 
         await status("🧮 Scoring confluence matrix...")
         report = self._engine.evaluate(
             ScanInputs(
                 asset=asset, primary=primary, analyses=analyses, onchain=onchain, relative_strength=rel_strength,
                 alerts=alerts, data_sources=sorted(sources), errors=errors,
-                extra_rules=self._studies.extra_rules() if self._studies is not None else {},
+                extra_rules=extra_rules,
             )
         )
         logger.info("scan scored", extra={"symbol": asset.symbol, "signal": report.signal.value, "score": report.score,
@@ -171,6 +179,28 @@ class ScanOrchestrator:
 
         await status("✅ Final Decision Ready")
         return report
+
+    async def _match_indicators(
+        self, alerts: list[PineAlert], extra_rules: dict[str, IndicatorRule], errors: list[str]
+    ) -> dict[str, IndicatorRule]:
+        """A Pine alert whose name is not a config key scores on DEFAULT_RULE. Say so, and match it when we can."""
+        if self._rules is None:
+            return {}
+        known = self._rules.merged(extra_rules)
+        names = [a.indicator for a in alerts if a.indicator and not known.has(a.indicator)]
+        if not names:
+            return {}
+
+        matched: dict[str, IndicatorRule] = {}
+        unmatched = list(dict.fromkeys(names))
+        if self._matcher is not None:
+            try:
+                matched, unmatched = await self._matcher.resolve(names, known)
+            except Exception as exc:  # noqa: BLE001 - matching is an aid, never a scan failure
+                logger.warning("indicator matching skipped", extra={"error": str(exc)})
+        for name in unmatched:
+            errors.append(f"pine alert '{name}' matches no rule in custom_indicators.json — scored with defaults")
+        return matched
 
     async def _fetch_studies(self, asset: AssetInfo, tf: Timeframe, studies: dict[str, dict[str, Any]], errors: list[str]) -> list[PineAlert]:
         assert self._tv_session is not None

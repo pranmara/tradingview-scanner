@@ -25,6 +25,7 @@ from app.config import get_settings
 from app.custom_indicators import CustomIndicatorRules
 from app.decision_engine import DecisionEngine
 from app.execution_router import ExecutionRouter
+from app.indicator_matcher import build_matcher
 from app.logging_config import setup_logging
 from app.orchestrator import ScanOrchestrator
 from app.signal_journal import SignalJournal
@@ -97,10 +98,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     advisor = build_advisor(settings, typesafe)
     nl_router = build_router(settings, typesafe)
     resolver = build_resolver(settings, typesafe, cache=redis)
+    matcher = build_matcher(settings, typesafe, cache=redis)
     orchestrator = ScanOrchestrator(
         settings, market, nansen, alert_store, DecisionEngine(settings, rules), ExecutionRouter(settings, http),
         journal=SignalJournal(settings.signal_journal_path), tv_session=tv_session, studies=studies,
-        resolver=resolver,
+        resolver=resolver, rules=rules, matcher=matcher,
     )
 
     app.state.settings = settings
@@ -118,7 +120,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         extra={
             "mcp": bool(mcp), "redis": redis is not None, "nansen": f"{settings.nansen_mode}/{'key' if nansen.enabled else 'no-key'}",
             "tv_session": tv_session is not None, "tv_studies": sorted(studies.active()),
-            "typesafe": f"autoconfig={advisor is not None} natural_language={nl_router is not None} symbols={resolver is not None}",
+            "typesafe": f"autoconfig={advisor is not None} natural_language={nl_router is not None} symbols={resolver is not None} indicators={matcher is not None}",
             "execution": "live" if settings.execution_live else ("dry-run" if settings.execution_enabled else "disabled"),
             "allowed_users": len(settings.allowed_user_ids), "custom_indicator_rules": rules.names,
         },

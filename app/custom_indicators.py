@@ -66,6 +66,13 @@ class CustomIndicatorRules:
     def rule_for(self, indicator: str) -> IndicatorRule:
         return self._rules.get(indicator.lower(), DEFAULT_RULE)
 
+    def has(self, indicator: str) -> bool:
+        """Whether `rule_for` would find a real rule rather than silently returning DEFAULT_RULE."""
+        return indicator.lower() in self._rules
+
+    def named(self, indicator: str) -> IndicatorRule | None:
+        return self._rules.get(indicator.lower())
+
     def merged(self, extra: dict[str, IndicatorRule]) -> CustomIndicatorRules:
         if not extra:
             return self

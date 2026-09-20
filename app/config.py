@@ -114,6 +114,7 @@ class Settings(BaseSettings):
     typesafe_autoconfig: bool = True
     typesafe_natural_language: bool = True
     typesafe_symbol_resolution: bool = True
+    typesafe_indicator_matching: bool = True
     typesafe_model: str | None = None
     typesafe_min_confidence: float = 0.55
     typesafe_timeout_seconds: float = 10.0
@@ -122,6 +123,7 @@ class Settings(BaseSettings):
     typesafe_probe_bars: int = 120
     typesafe_symbol_min_confidence: float = 0.7   # stricter: this one redirects which market gets loaded
     typesafe_symbol_cache_ttl_seconds: int = 30 * 86_400
+    typesafe_indicator_min_confidence: float = 0.7   # a wrong match scores into the wrong bucket
 
     # Backtest defaults
     backtest_fee_bps: float = 10.0
