@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from app.asset_classifier import KNOWN_CRYPTO_BASES, classify
-from app.clients.typesafe import build_client
+from app.clients.typesafe import build_client, describe_error, log_call
 from app.schemas import Timeframe
 from app.timeframes import parse_timeframe
 
@@ -175,14 +176,20 @@ class CommandRouter:
                 | {_NO_INSTRUMENT: "No word in the message names a market to analyse."},
             )
 
+        started = time.monotonic()
         try:
             kwargs: dict[str, Any] = {"model": self._model} if self._model else {}
             response = await self._client.system_one(state={"message": message}, questions=questions, **kwargs)
         except Exception as exc:  # noqa: BLE001 - a routing failure must not swallow the user's message
+            detail = describe_error(exc)
+            log_call("natural_language", started, "error", error=detail)
             logger.warning("typesafe routing failed", extra={"error": str(exc)})
-            return Route(intent="unavailable", note=f"TypeSafe unavailable ({type(exc).__name__}).")
+            return Route(intent="unavailable", note=detail)
 
-        return self._interpret(response, tokens, default_timeframe)
+        route = self._interpret(response, tokens, default_timeframe)
+        log_call("natural_language", started, route.intent,
+                 confidence=round(route.confidence, 3), resolved_symbol=route.symbol)
+        return route
 
     def _interpret(self, response: Any, tokens: list[str], default_timeframe: Timeframe) -> Route:
         try:

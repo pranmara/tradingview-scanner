@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, get_args
 
 from app.clients.tradingview_ws import ScriptInfo, StudyResult
-from app.clients.typesafe import build_client
+from app.clients.typesafe import build_client, describe_error, log_call
 from app.custom_indicators import Bucket
 
 logger = logging.getLogger(__name__)
@@ -249,14 +250,20 @@ class StudyAdvisor:
                 criteria={e.key: self._plot_criterion(e) for e in evidence},
             )
 
+        started = time.monotonic()
         try:
             kwargs: dict[str, Any] = {"model": self._model} if self._model else {}
             response = await self._client.system_one(state=state, questions=questions, **kwargs)
         except Exception as exc:  # noqa: BLE001 - never block /indicators add on an upstream failure
+            detail = describe_error(exc)
+            log_call("autoconfig", started, "error", script=script.name, error=detail)
             logger.warning("typesafe study advice failed", extra={"script": script.name, "error": str(exc)})
-            return Advice(reason=f"TypeSafe unavailable ({type(exc).__name__}) — kept manual defaults.")
+            return Advice(reason=f"TypeSafe unavailable — {detail} — kept manual defaults.")
 
-        return self._interpret(response, evidence, plots)
+        advice = self._interpret(response, evidence, plots)
+        log_call("autoconfig", started, "applied" if advice.applied else "declined",
+                 script=script.name, confidence=round(advice.confidence, 3), because=advice.reason)
+        return advice
 
     @staticmethod
     def _plot_criterion(ev: _PlotEvidence) -> dict[str, Any]:

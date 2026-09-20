@@ -195,7 +195,17 @@ def test_upstream_failure_is_reported_not_raised():
     r = route(router, "is btc worth a long")
 
     assert r.intent == "unavailable"
-    assert "unavailable" in r.note.lower()
+    assert r.note == "RuntimeError: boom"
+
+
+def test_the_note_carries_the_api_message_not_just_the_exception_class():
+    """A 400 naming the offending model is the whole diagnosis; the class alone says only 'something broke'."""
+    router, _ = _router(error=RuntimeError("400 Unknown model: # blank = the SDK/account default (Jev)"))
+
+    note = route(router, "is btc worth a long").note
+
+    assert "Unknown model" in note
+    assert "RuntimeError" in note
 
 
 def test_malformed_response_is_reported_not_raised():

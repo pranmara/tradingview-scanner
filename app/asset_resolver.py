@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Protocol
 
 from redis.asyncio import Redis
 
 from app.asset_classifier import KNOWN_CRYPTO_BASES, QUOTE_ASSETS, AssetInfo, classify
-from app.clients.typesafe import build_client
+from app.clients.typesafe import build_client, describe_error, log_call
 
 logger = logging.getLogger(__name__)
 
@@ -100,25 +101,28 @@ class AssetResolver:
             criteria=dict(CLASS_CRITERIA),
         )
 
+        started = time.monotonic()
         try:
             kwargs: dict[str, Any] = {"model": self._model} if self._model else {}
             response = await self._client.system_one(state=state, questions={"asset_class": question}, **kwargs)
         except Exception as exc:  # noqa: BLE001 - an unresolved ticker just keeps the existing fallback
+            log_call("symbol_resolution", started, "error", ticker=asset.symbol, error=describe_error(exc))
             logger.warning("asset class resolution failed", extra={"ticker": asset.symbol, "error": str(exc)})
             return None
 
         try:
             answer = response.choices["asset_class"]
         except (AttributeError, KeyError, TypeError):
+            log_call("symbol_resolution", started, "malformed", ticker=asset.symbol)
             logger.warning("asset class response not understood", extra={"ticker": asset.symbol})
             return None
 
         choice, confidence = str(answer.choice), float(answer.confidence)
-        if choice not in CLASS_CRITERIA or confidence < self._min_confidence:
-            logger.info("asset class left unresolved", extra={"ticker": asset.symbol, "choice": choice,
-                                                              "confidence": confidence})
-            return "unclear"
-        return choice
+        rejected = choice not in CLASS_CRITERIA or confidence < self._min_confidence
+        verdict = "unclear" if rejected else choice
+        log_call("symbol_resolution", started, verdict, ticker=asset.symbol,
+                 said=choice, confidence=round(confidence, 3), accepted=not rejected)
+        return verdict
 
     async def _cached(self, key: str) -> str | None:
         if self._cache is None:

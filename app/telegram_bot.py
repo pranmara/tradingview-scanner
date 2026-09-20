@@ -277,7 +277,9 @@ def build_application(
             lead = {"unsure": "🤔 I'm not sure what you meant.",
                     "unavailable": "🤔 Natural language is unavailable right now.",
                     "other": "🤔 I only analyse charts."}[route.intent]
-            await thinking.edit_text(f"{lead}\n\n{_USAGE}", parse_mode=ParseMode.HTML)
+            # The router worked out why; saying so beats making someone grep the logs for it.
+            detail = f"\n<i>{html.escape(route.note)}</i>" if route.note else ""
+            await thinking.edit_text(f"{lead}{detail}\n\n{_USAGE}", parse_mode=ParseMode.HTML)
             return
         await thinking.edit_text(_USAGE, parse_mode=ParseMode.HTML)
 

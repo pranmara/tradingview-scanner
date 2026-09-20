@@ -1,9 +1,29 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_ERROR_LIMIT = 200
+
+
+def describe_error(exc: BaseException, limit: int = _ERROR_LIMIT) -> str:
+    """Class plus the API's own message. The class alone says 'something broke'; the message says what."""
+    text = str(exc).strip()
+    if not text:
+        return type(exc).__name__
+    return f"{type(exc).__name__}: {text[:limit]}"
+
+
+def log_call(feature: str, started: float, outcome: str, **fields: Any) -> None:
+    """One line per request actually sent, whatever the outcome — cache hits deliberately do not log."""
+    logger.info(
+        "typesafe call",
+        extra={"feature": feature, "outcome": outcome,
+               "ms": round((time.monotonic() - started) * 1000), **fields},
+    )
 
 
 def build_client(settings: Any) -> Any | None:

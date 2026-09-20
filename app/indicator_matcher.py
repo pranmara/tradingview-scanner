@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from collections.abc import Iterable
 from typing import Any, Protocol
 
 from redis.asyncio import Redis
 
-from app.clients.typesafe import build_client
+from app.clients.typesafe import build_client, describe_error, log_call
 from app.custom_indicators import CustomIndicatorRules, IndicatorRule
 
 logger = logging.getLogger(__name__)
@@ -123,16 +124,19 @@ class IndicatorMatcher:
             for name in names
         }
 
+        started = time.monotonic()
         try:
             kwargs: dict[str, Any] = {"model": self._model} if self._model else {}
             response = await self._client.system_one(state=state, questions=questions, **kwargs)
         except Exception as exc:  # noqa: BLE001 - an unmatched indicator just keeps the default rule
+            log_call("indicator_matching", started, "error", asked=names, error=describe_error(exc))
             logger.warning("indicator matching failed", extra={"names": names, "error": str(exc)})
             return {}
 
         try:
             choices = response.choices
         except (AttributeError, TypeError):
+            log_call("indicator_matching", started, "malformed", asked=names)
             logger.warning("indicator matching response not understood", extra={"names": names})
             return {}
 
@@ -148,6 +152,8 @@ class IndicatorMatcher:
                 out[name] = _NO_MATCH
                 continue
             out[name] = choice
+        hits = sum(1 for v in out.values() if v != _NO_MATCH)
+        log_call("indicator_matching", started, f"{hits}/{len(names)} matched", asked=names, verdicts=out)
         return out
 
     async def _cached(self, fingerprint: str, name: str) -> str | None:

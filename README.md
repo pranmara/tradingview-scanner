@@ -212,6 +212,17 @@ It is deliberately confined:
 
 `/status` reports whether it is on.
 
+Every request the four features make logs one line, whatever the outcome — including the answers that change nothing, which is what makes "was it even called?" answerable:
+
+```json
+{"msg": "typesafe call", "feature": "natural_language",  "outcome": "scan",   "ms": 96,  "confidence": 0.9, "resolved_symbol": "BTC"}
+{"msg": "typesafe call", "feature": "symbol_resolution", "outcome": "stock",  "ms": 88,  "ticker": "AAPL", "said": "stock", "confidence": 0.95, "accepted": true}
+{"msg": "typesafe call", "feature": "autoconfig",        "outcome": "declined", "ms": 121, "because": "TypeSafe was unsure (48% < 55%) ..."}
+{"msg": "typesafe call", "feature": "natural_language",  "outcome": "error",  "ms": 34,  "error": "TypeSafeAuthenticationError: 401 ..."}
+```
+
+A cache hit deliberately logs nothing, so the absence of a line for a ticker you have scanned before is the cache working, not a failure. Errors also reach you in Telegram with the API's own message attached, rather than a bare "unavailable".
+
 Caveats: this is not an API TradingView offers; it can stop working after a TradingView release, the session cookie is a full-access credential (rotate it, never commit it), and heavy use may get the account rate-limited. Route A is the one to build on; Route B is for indicators whose alerts can't express the values you need.
 
 ## Custom TradingView indicators
@@ -285,6 +296,7 @@ Without a domain: `docker compose up -d --build` (base file only) runs bot + Red
 | Restart | `docker compose restart app` |
 | Backup | `tar czf scanner-backup.tgz /opt/tradingview-scanner/.env /opt/tradingview-scanner/data` |
 | Backtest on the server | `docker compose exec app python -m app.backtest BTCUSDT --tf 4h --bars 1500` |
+| See every TypeSafe request | `docker compose logs -f app \| grep '"msg": "typesafe call"'` |
 
 Security notes: `.env` is `chmod 600`; the app port is bound to loopback and only `/webhooks/tradingview` + `/healthz` are proxied; the container runs as a non-root user; Caddy renews certificates automatically; keep `TV_WEBHOOK_ENFORCE_IP_ALLOWLIST=true` (Caddy passes the real client IP and the overlay sets `TV_WEBHOOK_TRUST_PROXY=true`).
 
