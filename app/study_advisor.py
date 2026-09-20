@@ -343,7 +343,7 @@ class StudyAdvisor:
 
 def build_advisor(settings: Any, client: Any | None = None) -> StudyAdvisor | None:
     """None when auto-configuration is off; a disabled advisor is never constructed."""
-    if not settings.typesafe_active:
+    if not (settings.typesafe_active and settings.typesafe_autoconfig):
         return None
     client = client if client is not None else build_client(settings)
     if client is None:

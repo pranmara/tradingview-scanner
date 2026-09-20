@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from redis.asyncio import Redis
 
 from app.alert_store import AlertStore
+from app.asset_resolver import build_resolver
 from app.clients.binance import BinanceClient
 from app.clients.market_data import CompositeMarketDataProvider
 from app.clients.nansen import NansenClient
@@ -95,9 +96,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     typesafe = build_typesafe(settings)
     advisor = build_advisor(settings, typesafe)
     nl_router = build_router(settings, typesafe)
+    resolver = build_resolver(settings, typesafe, cache=redis)
     orchestrator = ScanOrchestrator(
         settings, market, nansen, alert_store, DecisionEngine(settings, rules), ExecutionRouter(settings, http),
         journal=SignalJournal(settings.signal_journal_path), tv_session=tv_session, studies=studies,
+        resolver=resolver,
     )
 
     app.state.settings = settings
@@ -115,7 +118,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         extra={
             "mcp": bool(mcp), "redis": redis is not None, "nansen": f"{settings.nansen_mode}/{'key' if nansen.enabled else 'no-key'}",
             "tv_session": tv_session is not None, "tv_studies": sorted(studies.active()),
-            "typesafe": f"autoconfig={advisor is not None} natural_language={nl_router is not None}",
+            "typesafe": f"autoconfig={advisor is not None} natural_language={nl_router is not None} symbols={resolver is not None}",
             "execution": "live" if settings.execution_live else ("dry-run" if settings.execution_enabled else "disabled"),
             "allowed_users": len(settings.allowed_user_ids), "custom_indicator_rules": rules.names,
         },

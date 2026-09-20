@@ -116,6 +116,27 @@ The symbol is *selected, never generated*. The options are the words that actual
 
 Only authorised users (`TELEGRAM_ALLOWED_USER_IDS`) are routed, and the usual `TELEGRAM_SCAN_COOLDOWN_SECONDS` applies to whatever the router decides to run.
 
+### Tickers the static rules cannot place
+
+`app/asset_classifier.py` decides crypto-vs-stock from an exchange prefix, a trailing quote asset (`USDT`, `BTC`, …), a `crypto:`/`stock:` prefix, or a hardcoded `KNOWN_CRYPTO_BASES` list — and when none of those fire it falls back to *stock*. That list goes stale with every new listing, so a bare `HYPE` typed the week it launched was scanned as an equity and returned nothing.
+
+`classify()` now reports that guess as `ambiguous` instead of hiding it. It stays pure and synchronous — the webhook path and the backtester are untouched — and only `ScanOrchestrator` acts on the flag, asking TypeSafe crypto-or-stock once per ticker:
+
+```
+/scan HYPE
+  → classify() → STOCK (ambiguous: no exchange, no quote asset, not in the known list)
+  → resolver   → crypto @ 91%  →  re-classified as HYPEUSDT on Binance
+```
+
+| | |
+|---|---|
+| **When it runs** | Only on `/scan`, only when `ambiguous` is set. An exchange prefix, a quote asset, a `crypto:`/`stock:` prefix or a known base all skip it. |
+| **Cost** | One request per ticker, cached in Redis for 30 days (in memory without Redis). `unclear` answers are cached too, so nothing is re-asked every scan. |
+| **Threshold** | `TYPESAFE_SYMBOL_MIN_CONFIDENCE` defaults to 0.7 — stricter than the other two features, because this one redirects which market gets loaded. |
+| **When it declines** | `stock`, `unclear`, low confidence, or any API failure all keep today's fallback, so the worst case is the behaviour you already have. |
+
+A side benefit: Pine alerts arriving as `HYPEUSDT` are stored under that symbol, so resolving `/scan HYPE` to `HYPEUSDT` also makes those alerts match, which they previously did not.
+
 ## Connecting your TradingView account
 
 TradingView has no official API for chart or indicator data, so there are two routes:

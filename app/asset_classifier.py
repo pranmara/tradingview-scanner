@@ -33,6 +33,11 @@ class AssetInfo:
     quote: str | None
     asset_class: AssetClass
     exchange: str | None
+    # True when nothing in the symbol actually said "stock" — no exchange, no quote asset, not a known crypto base —
+    # and STOCK was simply the fallback. KNOWN_CRYPTO_BASES goes stale with every new listing, so a bare unknown
+    # ticker is a guess, not a classification. Callers that can afford an async lookup may resolve it; the rest
+    # keep the guess, which is what this module has always returned.
+    ambiguous: bool = False
 
     @property
     def is_crypto(self) -> bool:
@@ -102,4 +107,6 @@ def classify(raw: str) -> AssetInfo:
             base, quote = text, "USDT"
         return AssetInfo(raw, f"{base}{quote}", base, quote, AssetClass.CRYPTO, exchange)
 
-    return AssetInfo(raw, text, text, None, AssetClass.STOCK, exchange)
+    # Nothing positively identified this as an equity either. With no exchange prefix to go on, STOCK here is the
+    # fallback rather than a finding — true both for a bare ticker and for a USD pair whose base we don't know.
+    return AssetInfo(raw, text, text, None, AssetClass.STOCK, exchange, exchange is None)

@@ -9,6 +9,7 @@ from typing import Any
 
 from app.alert_store import AlertStore
 from app.asset_classifier import AssetInfo, classify
+from app.asset_resolver import AssetResolver
 from app.clients.market_data import CompositeMarketDataProvider
 from app.clients.nansen import NansenClient
 from app.clients.tradingview_ws import TradingViewSessionClient
@@ -63,6 +64,7 @@ class ScanOrchestrator:
         journal: SignalJournal | None = None,
         tv_session: TradingViewSessionClient | None = None,
         studies: StudyRegistry | None = None,
+        resolver: AssetResolver | None = None,
     ) -> None:
         self._s = settings
         self._market = market
@@ -73,6 +75,7 @@ class ScanOrchestrator:
         self._journal = journal
         self._tv_session = tv_session
         self._studies = studies
+        self._resolver = resolver
 
     async def scan(self, raw_symbol: str, primary: Timeframe, on_status: StatusCallback | None = None) -> ConfluenceReport:
         token = scan_id_var.set(uuid.uuid4().hex[:12])
@@ -91,6 +94,9 @@ class ScanOrchestrator:
             asset = classify(raw_symbol)
         except ValueError as exc:
             raise ScanError(str(exc)) from exc
+        if asset.ambiguous and self._resolver is not None:
+            # A bare ticker the static rules could not place. One cached lookup beats loading the wrong market.
+            asset = await self._resolver.resolve(asset)
 
         timeframes = scan_timeframes(primary)
         logger.info("scan started", extra={"symbol": asset.symbol, "asset_class": asset.asset_class.value,

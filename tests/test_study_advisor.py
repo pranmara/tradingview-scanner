@@ -4,6 +4,8 @@ import asyncio
 
 import pytest
 
+from pydantic import SecretStr
+
 from app.clients.tradingview_ws import ScriptInfo, StudyResult
 from app.custom_indicators import CustomIndicatorRules
 from app.schemas import AlertSignal, PineAlert
@@ -279,8 +281,9 @@ def test_no_advisor_without_a_key(settings):
 
 
 def test_no_advisor_when_autoconfig_is_off(settings):
-    off = settings.model_copy(update={"typesafe_api_key": "sk-test", "typesafe_autoconfig": False})
-    assert not off.typesafe_active
+    # A key alone does not switch the feature on; each feature has its own flag.
+    off = settings.model_copy(update={"typesafe_api_key": SecretStr("sk-test"), "typesafe_autoconfig": False})
+    assert off.typesafe_active
     assert build_advisor(off) is None
 
 

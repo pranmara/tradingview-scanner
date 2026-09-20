@@ -107,17 +107,21 @@ class Settings(BaseSettings):
     custom_indicators_path: str = "config/custom_indicators.json"
     signal_journal_path: str = "data/signals.jsonl"
 
-    # TypeSafe (Jev) — auto-configures `/indicators add` from a script's own metadata. Never touches scan scoring
-    # or the backtester: it runs once per add, and an outage just restores the manual plot=/above=/below= flags.
+    # TypeSafe (Jev). Three independent features, each gated by its own flag: auto-configuring `/indicators add`,
+    # natural-language commands, and resolving a bare ticker that could be either a coin or an equity. None of
+    # them touch scan scoring or the backtester, and each falls back to the previous behaviour when unavailable.
     typesafe_api_key: SecretStr | None = None
     typesafe_autoconfig: bool = True
     typesafe_natural_language: bool = True
+    typesafe_symbol_resolution: bool = True
     typesafe_model: str | None = None
     typesafe_min_confidence: float = 0.55
     typesafe_timeout_seconds: float = 10.0
     typesafe_probe_symbol: str = "BINANCE:BTCUSDT"
     typesafe_probe_timeframe: str = "4h"
     typesafe_probe_bars: int = 120
+    typesafe_symbol_min_confidence: float = 0.7   # stricter: this one redirects which market gets loaded
+    typesafe_symbol_cache_ttl_seconds: int = 30 * 86_400
 
     # Backtest defaults
     backtest_fee_bps: float = 10.0
@@ -158,7 +162,8 @@ class Settings(BaseSettings):
 
     @property
     def typesafe_active(self) -> bool:
-        return self.typesafe_autoconfig and self.typesafe_api_key is not None
+        """A key is configured. Each feature still gates on its own flag."""
+        return self.typesafe_api_key is not None
 
     @property
     def execution_live(self) -> bool:
