@@ -19,6 +19,7 @@ import random
 import re
 import string
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,6 +33,10 @@ from app.timeframes import TV_CHART_INTERVAL as _INTERVAL
 logger = logging.getLogger(__name__)
 
 WS_URL = "wss://data.tradingview.com/socket.io/websocket?from=chart"
+# The per-message timeout alone never fires: TradingView sends a heartbeat roughly every 10s, and each one
+# resets it. A study that never completes — no study_completed, no study_error — used to hang forever, and
+# with it every /scan that pulls an account indicator. This caps the whole session.
+SESSION_TIMEOUT_FACTOR = 4
 _ORIGIN = "https://data.tradingview.com"
 _UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 # Only "saved" works. Verified 2026-09-21: pine-facade answers HTTP 400 "Bad 'filter' value" to "favorites" and
@@ -156,8 +161,18 @@ class TradingViewSessionClient:
             await ws.send(_pack("switch_timezone", [chart, "Etc/UTC"]))
 
             series_done = study_sent = study_done = False
+            budget = self._timeout * SESSION_TIMEOUT_FACTOR
+            deadline = time.monotonic() + budget
             while not (series_done and (study is None or study_done)):
-                raw = await asyncio.wait_for(ws.recv(), timeout=self._timeout)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    waiting = "series" if not series_done else "study"
+                    raise UpstreamError(f"tradingview ws: {waiting} did not complete within {budget:.0f}s")
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=min(self._timeout, remaining))
+                except asyncio.TimeoutError:
+                    waiting = "series" if not series_done else "study"
+                    raise UpstreamError(f"tradingview ws: {waiting} did not complete (no reply in time)") from None
                 for frame in self._frames(str(raw)):
                     if frame.startswith("~h~"):
                         await ws.send(f"~m~{len(frame)}~m~{frame}")
