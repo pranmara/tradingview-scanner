@@ -169,6 +169,61 @@ tests the Bonferroni bar is |t| ≈ 3.2, so treat it as a lead.
 
 ---
 
+## 6. H1 — funding extremes: a real signal you cannot trade
+
+The first test of a *positioning* signal rather than a price pattern. Pre-registered before any funding data
+was fetched: perps whose longs pay the most funding should deliver lower forward returns, net of funding, than
+perps with the lowest funding. 87 Binance USDT perpetuals, 286 weekly rebalances on a calendar grid, a median
+of 50 names per date, 2021-03 to 2026-09. Long the lowest-funding decile, short the highest, 20 bps cost per
+rebalance.
+
+| | mean IC | t(IC) | gross spread | net spread | t(net) |
+|---|---|---|---|---|---|
+| TRAIN 2021-03 .. 2024-06 | −0.0594 | **−4.01** | +0.521% | +0.321% | 0.43 |
+| HOLDOUT 2024-07 .. 2026-09 | −0.0197 | −1.56 | −0.559% | −0.759% | −0.91 |
+
+**Not accepted** (A1, A2 pass; A3, A4 fail). The 3-day horizon gives the same verdict.
+
+This is the only effect in the whole investigation with the predicted sign **and** strong significance
+(t = −4.01). Funding does carry real information about positioning. It fails for two reasons that are worth
+more than the verdict.
+
+### Carry is real, and momentum takes it back
+
+| component (whole period, per weekly rebalance) | spread | t |
+|---|---|---|
+| funding carry collected | +0.782% | **14.36** |
+| price move | −0.695% | −1.24 |
+| **total** | **+0.087%** | 0.15 |
+
+Shorting high-funding perps collects funding very reliably (t = 14). But perps have high funding *because* they
+are rallying while longs crowd in, and those rallies tend to continue, so the price loss on the short leg
+cancels the carry almost exactly. At the 3-day horizon it is +0.387% carry against −0.395% price. The market
+prices the carry roughly fairly: it is payment for taking on momentum risk, not free money.
+
+### The effect decayed
+
+| year | IC | t | net spread |
+|---|---|---|---|
+| 2021 | −0.0961 | −3.02 | +3.781% |
+| 2022 | −0.0640 | −2.47 | +1.211% |
+| 2023 | −0.0690 | −2.39 | −1.567% |
+| 2024 | −0.0009 | −0.05 | −1.873% |
+| 2025 | −0.0107 | −0.55 | −0.171% |
+| 2026 | −0.0258 | −1.18 | −1.693% |
+
+It worked in 2021–22 and has been close to zero since 2024, which is consistent with more participants
+running funding and basis trades. The train/holdout boundary (Jul 2024) falls right at the decay. Without the
+holdout, a train IC of t = −4.01 would have read as a textbook factor.
+
+### What not to do next
+
+The obvious refinement — short high funding only once momentum stalls — is a *new* hypothesis designed after
+seeing this data, including the holdout. It cannot be validated on the same data. If pursued, pre-register it
+and test it only on data that arrives afterwards.
+
+---
+
 ## Caveats that apply to all of the above
 
 - **Crypto only.** Yahoo rate-limited every equity attempt, so no stock is in any sample.
