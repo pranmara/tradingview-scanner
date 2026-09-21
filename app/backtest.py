@@ -346,7 +346,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tf", default="4h")
     parser.add_argument("--bars", type=int, default=1500)
     parser.add_argument("--min-score", type=float, default=None, help="Override MIN_SIGNAL_SCORE for the trade filter")
-    parser.add_argument("--exit-mode", choices=["tp2", "scaled"], default="scaled")
+    parser.add_argument("--exit-mode", choices=["tp2", "scaled"], default="tp2",
+                    help="tp2 (default) closes fully at 2.5R; scaled takes 40/30/30 at TP1/TP2/TP3 and "
+                         "moved SL to breakeven, which measured ~0.2R/trade worse")
     parser.add_argument("--fee-bps", type=float, default=None)
     parser.add_argument("--slippage-bps", type=float, default=None)
     parser.add_argument("--time-stop", type=int, default=None)

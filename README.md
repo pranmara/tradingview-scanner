@@ -64,7 +64,7 @@ Backtests include all of this automatically (no look-ahead: every detector uses 
 
 Things that are deliberately **not** in the score: news, funding rates, order-book data, and sentiment. They are useful but need separate feeds; if you add them, treat them as vetoes first and points second.
 
-**Honest expectations.** A confluence system like this typically produces few signals (a handful per symbol per month on 4h) with 35–50 % hit-rate at 2.5R. Expectancy comes from the asymmetry, not the win rate. Nothing here is a guarantee of profit — validate on your instruments with the backtester before risking capital.
+**Honest expectations — now measured, not assumed.** The matrix was calibrated against 22k evaluations and 2,884 simulated trades across 8 crypto markets: **the score does not rank setups (AUC 0.48) and no configuration was profitable out of sample.** One pre-registered config produced +51R in training and −0.133R per trade on held-out data. Read [docs/CALIBRATION.md](docs/CALIBRATION.md) before trusting any signal this produces, and keep `EXECUTION_ENABLED=false` until you have validated on your own instruments. The one change that did survive: exit flat at TP2 rather than scaling out, worth ~0.2R per trade.
 
 ## Backtesting: does the scanner produce what it claims?
 

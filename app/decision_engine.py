@@ -32,13 +32,18 @@ _KILL_ZONES_UTC = ((7, 10), (12, 15))  # London open, New York open
 
 
 def management_plan(time_stop_bars: int, risk_pct: float) -> list[str]:
+    """Flat exit at TP2, not the scale-out. Measured on 2,884 backtested trades across 8 markets and 8
+    configurations, a single exit at TP2 beat scaling out in 8 of 8 comparisons, in-sample and out — the
+    scale-out's move to breakeven after TP1 converts trades that would reach TP2 into zeros. Worth about
+    0.2R per trade. See docs/CALIBRATION.md; neither plan makes the system profitable on that evidence.
+    """
     return [
         f"Risk {risk_pct:g}% of equity per trade; size = risk ÷ (entry − SL)",
-        "TP1 (1.5R): close 40%, move SL to breakeven",
-        "TP2 (2.5R): close 30%, trail SL to TP1",
-        "TP3 (4R): close remainder, or trail 2×ATR while trend holds",
-        f"Time stop: exit at market if neither SL nor TP1 hits within {time_stop_bars} bars",
+        "TP2 (2.5R): close the full position — a single exit measured better than scaling out",
+        "Leave SL at its original level until TP2; moving it to breakeven at TP1 cost ~0.2R per trade",
+        f"Time stop: exit at market if neither SL nor TP2 hits within {time_stop_bars} bars",
         "Invalidate early on an opposite MSB/CHoCH on the primary timeframe",
+        "Backtest your own instruments before sizing up: `python -m app.backtest <SYM> --tf 4h --bars 3000`",
     ]
 
 

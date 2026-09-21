@@ -1,0 +1,204 @@
+# Calibration: does the Confluence Matrix predict anything?
+
+Measured 2026-09-20/21 against the live engine. Every number here came from `app/backtest.py` replaying the
+same `DecisionEngine` the scanner uses, on Binance candles. Reproduction commands are at the bottom.
+
+**Headline: the score does not rank setups, and no configuration tested was profitable out of sample.**
+The data layer, the levels, the institutional detection and the alerting all work. The score-to-signal
+mapping is the part that does not survive measurement.
+
+---
+
+## 1. A scoring bug found first
+
+`_indicators_bucket` scored 0 in every backtest — backtests never populate `snapshot` — but kept its 15
+points in the denominator, unlike `_institutional_bucket` and `_onchain_bucket` which drop out when they
+have no data. Every backtest score was therefore ~15% below what the same bar would score live, making the
+backtester useless for calibrating the live thresholds it exists to calibrate.
+
+Fixed: the bucket is available when it has a TradingView rating **or** a Pine reading.
+
+| BTCUSDT 4h, 989 bars | WATCH | max score | 60-80 bucket |
+|---|---|---|---|
+| before | 2 | 61.9 | n=2, hit 0.0% |
+| after | 37 | 72.8 | n=37, hit 16.2% |
+
+---
+
+## 2. The score does not rank a setup's own outcome
+
+AUC of each predictor against "reaches +2.5R before −1R", 13,924 bars over 5 markets. 0.50 is a coin flip.
+
+| predictor | 2.5R/40 | 1.5R/40 | 2.5R/100 | 1.5R/100 |
+|---|---|---|---|---|
+| **score** | **0.494** | 0.485 | 0.483 | 0.483 |
+| trend | 0.451 | 0.459 | 0.457 | 0.468 |
+| momentum | 0.499 | 0.499 | 0.495 | 0.496 |
+| institutional | 0.534 | 0.502 | 0.516 | 0.491 |
+| execution | 0.587 | 0.565 | 0.565 | 0.545 |
+
+Three things to take from this:
+
+- **The composite is slightly *worse* than a coin flip.** `trend` + `momentum` are 55 of the 100 points —
+  one mildly inverse, one noise — diluting the only informative component down to 10%.
+- **`trend` is inversely related.** By the time the ribbon aligns on 1h, 4h and 1d, the move is extended.
+  The bucket carrying the largest weight points the wrong way.
+- **`execution` is the only positive, and it is nearly definitional.** It is a monotone function of
+  `min(2.5, structural RRR)`, so "is there room for 2.5R" predicting "reaches 2.5R" is close to a tautology.
+  Its decile table shows the whole effect is the *bottom* decile (1.4% hit rate) — it identifies hopeless
+  setups, which the `effective_rrr >= min_rrr` gate already does.
+
+Loosening the target to 1.5R and doubling the time stop lifts the base rate from 12.6% to 32.0% but leaves
+the score's AUC at 0.48. **More winners, same inability to tell which.**
+
+---
+
+## 3. Real expectancy is negative
+
+Trade simulator with scaled exits, 10bps fees and 5bps slippage, 4 markets.
+
+| min_score | trades | win% | avgR | 95% CI on avgR | totalR |
+|---|---|---|---|---|---|
+| 0 | 225 | 40.0% | **−0.180** | −0.328 to −0.031 | −40.5 |
+| 55 | 80 | 36.2% | −0.117 | −0.358 to +0.124 | −9.4 |
+| 65 | 30 | 43.3% | +0.148 | −0.306 to +0.602 | +4.4 |
+| 75 | 8 | 25.0% | −0.653 | −1.153 to −0.153 | −5.2 |
+
+`min_score=0` takes everything the hard gates allow, and its interval excludes zero: **the gates alone lose
+money.** The +0.148 at 65 rests on 30 trades with an interval spanning −0.31 to +0.60.
+
+### Costs are a large share of the loss
+
+```
+cost in R = (2 × fee_bps + slippage_bps) / 10,000 ÷ stop_distance
+          = 0.0025 ÷ stop_distance
+```
+
+| stop distance | cost per round trip |
+|---|---|
+| 1.2% (a real 1h scan) | **0.205R** |
+| 2.0% (typical 4h) | 0.125R |
+| 4.0% (typical 1d) | 0.063R |
+
+This explains the timeframe split, the largest single effect measured: BTCUSDT 1h at `min_score=0` returned
+−0.472R per trade against −0.077R averaged over three 4h markets. **Do not run this on 1h** — friction alone
+is prohibitive at those stop distances, independent of signal quality.
+
+---
+
+## 4. Pre-registered sweep: one config passed training and failed out of sample
+
+Rules fixed before any result was seen: train on the earlier 60% of each market, verify on the last 40%;
+accept only a config whose train CI excludes zero, with ≥100 train trades, positive on ≥5 of 8 markets, and
+a positive holdout.
+
+| tf | atr | exit | train n | train avgR | CI-lo | mkts+ | holdout n | holdout avgR |
+|---|---|---|---|---|---|---|---|---|
+| 1d | 1.5 | scaled | 180 | −0.201 | −0.361 | 2/8 | 153 | +0.034 |
+| 1d | 1.5 | tp2 | 175 | −0.007 | −0.244 | 5/8 | 152 | +0.242 |
+| 1d | 2.5 | scaled | 179 | −0.200 | −0.361 | 2/8 | 151 | −0.002 |
+| 1d | 2.5 | tp2 | 174 | −0.006 | −0.244 | 5/8 | 149 | +0.205 |
+| 4h | 1.5 | scaled | 231 | +0.030 | −0.132 | 5/8 | 182 | −0.166 |
+| **4h** | **1.5** | **tp2** | **229** | **+0.224** | **+0.024** | **6/8** | **178** | **−0.133** |
+| 4h | 2.5 | scaled | 215 | −0.097 | −0.259 | 3/8 | 164 | −0.101 |
+| 4h | 2.5 | tp2 | 212 | +0.084 | −0.122 | 6/8 | 160 | −0.052 |
+
+**No configuration satisfied all four criteria.** One passed training at +0.224R per trade with a CI
+excluding zero, positive on 6 of 8 markets, over 229 trades — a +51R backtest — and produced −0.133R out of
+sample. Without the holdout rule written down beforehand, that cell is exactly what would have been shipped.
+
+The 1d configs drifted positive in the holdout while the 4h configs drifted negative. Opposite drifts in the
+two halves is regime dependence, not edge.
+
+### The one finding that survived: exit flat at TP2
+
+A single exit at TP2 beat the 40/30/30 scale-out in **8 of 8 comparisons**, in-sample and out. Both modes
+take identical entries — the take condition does not depend on exit mode — so this is a clean
+management-only comparison.
+
+| config | scaled → tp2 |
+|---|---|
+| 1d atr 1.5 | −0.201 → −0.007 |
+| 1d atr 2.5 | −0.200 → −0.006 |
+| 4h atr 1.5 | +0.030 → +0.224 |
+| 4h atr 2.5 | −0.097 → +0.084 |
+
+Mechanism: scaling out moves the stop to breakeven after TP1, converting trades that would have reached TP2
+into zeros. Worth roughly 0.2R per trade. `management_plan()` and the backtester default now reflect this.
+It makes the system *less bad*, not profitable.
+
+**Wider stops did not help.** ATR 2.5 was worse than 1.5 in 3 of 4 comparisons: cutting cost-per-R also
+shrinks the RRR and changes which trades clear the `effective_rrr >= 2.5` gate, and the second effect wins.
+
+---
+
+## 5. Cross-sectional ranking also fails
+
+A different question: not "is this chart good" but "which of these 51 is best right now". Ranking cancels the
+market-wide move, so a predictor can be useless in isolation and still rank well. Information Coefficient is
+the Spearman correlation between predictor and forward return at each non-overlapping rebalance date.
+
+**This test initially produced a false positive from a bug in the harness.** Sampling every H-th bar *per
+symbol* put each symbol on its own date grid, because they list on different dates; cross-sections were thin
+and arbitrarily selected. Anchoring the stride to the calendar fixed it:
+
+| | score IC | t | mom20 (control) IC | t | symbols/date |
+|---|---|---|---|---|---|
+| broken grid, 12 symbols | +0.058 | **2.69** | +0.018 | 0.77 | 8.0 |
+| fixed grid, 12 symbols | +0.031 | 1.70 | +0.035 | 1.67 | 11.5 |
+| fixed grid, 51 symbols | +0.005 | **0.42** | −0.002 | −0.17 | 36.8 |
+
+The signal collapsed monotonically as the test became more correct and more powerful. On the corrected
+12-symbol grid the score (t = 1.70) is indistinguishable from plain 20-bar momentum (t = 1.67), and neither
+is significant.
+
+At 51 symbols, 288 rebalances, nothing ranks:
+
+| predictor | mean IC | t(IC) | spread% | t(spread) |
+|---|---|---|---|---|
+| score | +0.0052 | 0.42 | +0.913 | 1.14 |
+| trend | −0.0013 | −0.10 | +1.070 | 1.31 |
+| momentum | −0.0032 | −0.31 | −0.808 | −1.04 |
+| institutional | +0.0060 | 0.53 | −0.326 | −0.60 |
+| execution | −0.0096 | −0.92 | −0.613 | −1.24 |
+| mom20 (control) | −0.0024 | −0.17 | +1.259 | 1.28 |
+
+The only repeating signal is momentum's long/short **spread** — t = 2.81 at a 14-day horizon, t = 2.93 on the
+12-symbol set. That is the classic momentum factor living in the tails, and it is not this score. With 36
+tests the Bonferroni bar is |t| ≈ 3.2, so treat it as a lead.
+
+---
+
+## Caveats that apply to all of the above
+
+- **Crypto only.** Yahoo rate-limited every equity attempt, so no stock is in any sample.
+- **~2 to 5.5 years, one broad regime.** The train/holdout drift shows how much that matters.
+- **Survivorship bias** in the 60-symbol universe: it is today's top names by volume, which biases *toward*
+  finding an edge. A negative result is therefore strong; a positive one needs discounting.
+- **`hit` is not P&L.** The AUC sections treat "did not reach target in N bars" as a loss, while the real
+  simulator time-stops at market. Section 3 is the P&L-relevant one.
+- **Non-overlapping windows throughout.** Overlapping them would have tripled the apparent sample and
+  inflated every t-statistic.
+
+## What to do with this
+
+1. **Keep `EXECUTION_ENABLED=false`.** Now evidenced, not precautionary.
+2. **Do not trade 1h.** Friction alone is disqualifying.
+3. **Do not tune thresholds.** There is nothing to tune — §4 shows what tuning produces.
+4. **Use the scanner as a scanner.** The multi-source aggregation, levels, footprints and alerting are sound.
+5. **If pursuing an edge, change the evidence, not the weights.** Candidates not yet tested: funding rates,
+   order-book imbalance, a regime filter that sits out chop. Note that cross-sectional ranking — the most
+   promising structural idea — was tested here and failed.
+
+## Reproducing
+
+```bash
+python -m app.backtest BTCUSDT --tf 4h --bars 3000                  # single market, calibration table
+python -m app.backtest BTCUSDT --tf 4h --bars 3000 --exit-mode scaled   # compare against the old default
+python -m app.backtest --journal data/signals.jsonl                 # forward-test real live signals
+```
+
+The sweep, AUC and cross-sectional harnesses were one-off scripts, not committed. The single most useful
+ongoing measurement is the journal replay: `SignalJournal` records every live report, and
+`--journal` scores them against candles that arrived afterwards. That accumulates genuine out-of-sample
+evidence with no backtest assumptions at all.

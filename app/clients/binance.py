@@ -28,6 +28,7 @@ class BinanceClient:
             raise UpstreamError(f"binance returned no candles for {symbol}")
         return OHLCV(symbol=symbol, timeframe=timeframe, candles=candles, source="binance")
 
+    @with_retry()
     async def get_ohlcv_history(self, symbol: str, timeframe: Timeframe, bars: int) -> OHLCV:
         """Page backwards through /klines (1000 per call) to collect `bars` candles."""
         collected: list[Candle] = []

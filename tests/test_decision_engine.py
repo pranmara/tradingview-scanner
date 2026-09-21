@@ -4,7 +4,7 @@ import time
 
 from app.asset_classifier import classify
 from app.config import Settings
-from app.decision_engine import DecisionEngine, ScanInputs
+from app.decision_engine import DecisionEngine, ScanInputs, management_plan
 from app.schemas import (
     AlertSignal,
     InstitutionalSignals,
@@ -220,7 +220,8 @@ def test_position_sizing_and_management_plan() -> None:
     lv = report.levels
     assert lv is not None and lv.risk_amount == 100.0
     assert lv.position_units == 100.0 / lv.risk_per_unit
-    assert report.management and "breakeven" in " ".join(report.management)
+    # Was asserting "breakeven", which now only appears in the warning against it — check sizing advice instead.
+    assert report.management and any("Risk 1% of equity" in line for line in report.management)
 
 
 def test_custom_indicator_rule_feeds_trend_bucket(settings: Settings) -> None:
@@ -313,3 +314,20 @@ def test_a_rating_still_keeps_the_bucket_available(settings: Settings) -> None:
         ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=_all_bullish()))
     ind = next(b for b in report.buckets if b.key == "indicators")
     assert ind.available and report.coverage_pct == 100
+
+
+def test_management_plan_is_a_flat_tp2_exit(settings: Settings) -> None:
+    """Scaling out measured ~0.2R/trade worse in 8 of 8 configurations; the advice follows the measurement."""
+    plan = management_plan(settings.backtest_time_stop_bars, settings.risk_per_trade_pct)
+    joined = " ".join(plan).lower()
+    assert "close the full position" in joined
+    assert "breakeven at tp1" in joined          # named as the thing NOT to do
+    assert "close 40%" not in joined
+    assert "trail sl to tp1" not in joined
+
+
+def test_a_report_with_levels_carries_the_plan(settings: Settings) -> None:
+    report = DecisionEngine(settings).evaluate(
+        ScanInputs(asset=classify("BTCUSDT"), primary=Timeframe.H4, analyses=_all_bullish()))
+    assert report.levels is not None
+    assert report.management and any("TP2" in line for line in report.management)

@@ -71,6 +71,7 @@ class BybitClient:
             errors.append(f"bybit {category}: no candles")
         raise UpstreamError(f"bybit returned no candles for {symbol}: " + " | ".join(errors))
 
+    @with_retry()
     async def get_ohlcv_history(self, symbol: str, timeframe: Timeframe, bars: int) -> OHLCV:
         """Page backwards through /v5/market/kline to collect `bars` candles, mirroring the Binance client."""
         for category in self._categories:
