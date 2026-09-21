@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import html
 import logging
 import math
@@ -9,6 +10,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -33,8 +35,12 @@ MIN_RESOLVED_TO_JUDGE = 50
 MIN_NAMES_PER_WEEK = 10    # a within-week ranking of fewer names than this is too noisy to count
 MIN_WEEKS_TO_JUDGE = 8     # weeks are the independent unit, so the verdict waits on weeks, not rows
 HOUR_MS = 3_600_000
+DAY_MS = 86_400_000
+TELEGRAM_UPLOAD_LIMIT = 49 * 1024 * 1024   # bots may upload 50 MB; keep a margin
+HEALTHY_RATIO = 0.90
 
 Notify = Callable[[str], Awaitable[None]]
+Backup = Callable[[bytes, str], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------- schedule
@@ -175,7 +181,7 @@ def forward_report(records: list[dict[str, Any]], candles_for: dict[tuple[str, s
     return rep
 
 
-def format_digest(rep: ForwardReport, settings: Settings) -> str:
+def format_digest(rep: ForwardReport, settings: Settings, health: Health | None = None) -> str:
     e = html.escape
     if rep.total == 0:
         return "📓 <b>Forward journal</b>\nNothing recorded yet. The first scheduled scan runs after the next candle closes."
@@ -186,6 +192,18 @@ def format_digest(rep: ForwardReport, settings: Settings) -> str:
         f"Since {since}: {rep.total} reports ({sources})",
         f"Watchlist: {len(settings.journal_symbols)} symbols · {e(settings.journal_timeframe)} · "
         f"every {settings.journal_interval_hours}h",
+    ]
+    if health is not None:
+        runs = "run" if health.empty_slots == 1 else "runs"
+        lines.append(f"Scans this week: {health.actual:,} of {health.expected:,} expected "
+                     f"({100 * health.ratio:.0f}%) · {health.empty_slots} missed {runs}")
+        if health.empty_slots:
+            lines.append(f"⚠️ {health.empty_slots} scheduled {runs} wrote nothing — the runner or the VPS was down. "
+                         f"Check <code>docker compose logs app</code>.")
+        elif health.ratio < HEALTHY_RATIO:
+            lines.append("⚠️ Many scans failed — a data source may have changed. "
+                         "Check <code>docker compose logs app</code>.")
+    lines += [
         "",
         "<b>Does the score rank this week's names against each other?</b>",
         "<i>Spearman IC of score vs realised R within each week · each week counts once</i>",
@@ -236,6 +254,56 @@ def format_digest(rep: ForwardReport, settings: Settings) -> str:
     return "\n".join(lines)
 
 
+
+# ---------------------------------------------------------------------------- health
+@dataclass
+class Health:
+    slots: int          # scheduled runs that should have happened in the window
+    empty_slots: int    # runs that produced nothing at all: the runner or the VPS was down
+    expected: int       # slots x symbols
+    actual: int         # reports actually written
+
+    @property
+    def ratio(self) -> float:
+        return self.actual / self.expected if self.expected else 0.0
+
+
+def journal_health(records: list[dict[str, Any]], now_ms: int, n_symbols: int, interval_hours: int,
+                   offset_minutes: int, window_days: int = 7, settle_minutes: int = 15) -> Health | None:
+    """Did the runner actually run? Counts scheduled reports per slot over the last week, or since the first
+    scheduled report if that is more recent, so a dead runner shows up within a week rather than as a digest
+    that is quietly thin. The newest slot is skipped while its ~1-minute scan may still be in progress."""
+    stamps = sorted(r["ts_ms"] for r in records if r.get("source") == "scheduled")
+    if not stamps or n_symbols <= 0:
+        return None
+    period, offset = interval_hours * HOUR_MS, offset_minutes * 60_000
+
+    def slot_of(ts: int) -> int:
+        return ((ts - offset) // period) * period + offset
+
+    window_slot = slot_of(now_ms - window_days * DAY_MS)
+    if window_slot < now_ms - window_days * DAY_MS:
+        window_slot += period
+    first = max(slot_of(stamps[0]), window_slot)
+    last = slot_of(now_ms - settle_minutes * 60_000)
+    if last < first:
+        return None
+    slots = list(range(first, last + 1, period))
+    per_slot = Counter(slot_of(ts) for ts in stamps if first <= ts < last + period)
+    return Health(slots=len(slots), empty_slots=sum(1 for sl in slots if per_slot.get(sl, 0) == 0),
+                  expected=len(slots) * n_symbols, actual=sum(per_slot.get(sl, 0) for sl in slots))
+
+
+def backup_payload(path: str | Path, now_ms: int | None = None) -> tuple[bytes, str] | None:
+    """The journal, gzipped and named by date. Forward data cannot be re-downloaded if the VPS dies, so the
+    weekly digest carries a copy off the box. JSONL compresses about 10x, far under Telegram's upload limit."""
+    p = Path(path)
+    if not p.exists() or p.stat().st_size == 0:
+        return None
+    day = datetime.fromtimestamp((now_ms or int(time.time() * 1000)) / 1000, UTC).strftime("%Y-%m-%d")
+    return gzip.compress(p.read_bytes(), compresslevel=9), f"signals-{day}.jsonl.gz"
+
+
 # ---------------------------------------------------------------------------- runner
 @dataclass
 class ScanSummary:
@@ -252,12 +320,13 @@ class JournalRunner:
     TradingView account."""
 
     def __init__(self, settings: Settings, orchestrator: Any, market: Any, journal_path: str,
-                 notify: Notify | None = None, pause_seconds: float = 1.0) -> None:
+                 notify: Notify | None = None, pause_seconds: float = 1.0, backup: Backup | None = None) -> None:
         self._s = settings
         self._orch = orchestrator
         self._market = market
         self._path = journal_path
         self.notify = notify
+        self.backup = backup
         self._pause = pause_seconds
         tf = parse_timeframe(settings.journal_timeframe)
         if tf is None:
@@ -300,7 +369,28 @@ class JournalRunner:
     async def build_digest(self) -> str:
         records = read_journal(self._path)
         candles = await self._candles(records)
-        return format_digest(forward_report(records, candles, self._s.backtest_time_stop_bars), self._s)
+        s = self._s
+        health = journal_health(records, int(time.time() * 1000), len(s.journal_symbols),
+                                s.journal_interval_hours, s.journal_offset_minutes)
+        return format_digest(forward_report(records, candles, s.backtest_time_stop_bars), s, health)
+
+    def backup_payload(self) -> tuple[bytes, str] | None:
+        return backup_payload(self._path)
+
+    async def send_backup(self) -> str:
+        """Sends the gzipped journal through the backup callback, and says what happened."""
+        if self.backup is None:
+            return "no backup destination configured"
+        payload = self.backup_payload()
+        if payload is None:
+            return "journal is empty, nothing to back up"
+        data, name = payload
+        if len(data) > TELEGRAM_UPLOAD_LIMIT:
+            logger.warning("journal backup too large for telegram", extra={"bytes": len(data)})
+            return (f"backup is {len(data) / 1e6:.0f} MB, over Telegram's limit — "
+                    f"copy data/signals.jsonl off the VPS by hand")
+        await self.backup(data, name)
+        return f"sent {name} ({len(data) / 1024:.0f} KB)"
 
     async def run_forever(self) -> None:
         s = self._s
@@ -315,11 +405,12 @@ class JournalRunner:
                 if self.notify is not None and is_digest_slot(slot, s.journal_digest_weekday,
                                                                s.journal_digest_hour_utc, s.journal_interval_hours):
                     await self.notify(await self.build_digest())
+                    logger.info("journal backup", extra={"result": await self.send_backup()})
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - a bad cycle is logged and the next slot still runs
                 logger.exception("journal cycle failed")
 
 
-__all__ = ["MIN_NAMES_PER_WEEK", "MIN_WEEKS_TO_JUDGE", "JournalRunner", "ForwardReport", "auc_with_ci", "format_digest", "forward_report",
+__all__ = ["Health", "backup_payload", "journal_health", "MIN_NAMES_PER_WEEK", "MIN_WEEKS_TO_JUDGE", "JournalRunner", "ForwardReport", "auc_with_ci", "format_digest", "forward_report",
            "is_digest_slot", "next_slot_ms", "resolve", "weekly_sample"]

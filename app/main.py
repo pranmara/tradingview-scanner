@@ -143,7 +143,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 except Exception as exc:  # noqa: BLE001 - one unreachable user must not block the others
                     logger.warning("journal digest not delivered", extra={"user_id": uid, "error": str(exc)})
 
+        async def backup(data: bytes, name: str) -> None:
+            for uid in settings.allowed_user_ids:
+                try:
+                    await telegram.bot.send_document(
+                        uid, document=data, filename=name,
+                        caption="Forward journal backup. Keep it: forward data can't be re-downloaded if the VPS dies.",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("journal backup not delivered", extra={"user_id": uid, "error": str(exc)})
+
         runner.notify = notify
+        runner.backup = backup
         journal_task = asyncio.create_task(runner.run_forever(), name="journal-runner")
     logger.info(
         "service started",

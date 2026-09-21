@@ -350,3 +350,132 @@ def test_weeks_that_cancel_read_as_no_ranking(settings: Settings):
 
 def test_the_pooled_interval_is_labelled_as_optimistic(settings: Settings):
     assert "read it as optimistic" in format_digest(ForwardReport(total=1, first_ts=_ms(2026, 9, 1)), settings)
+
+
+# ------------------------------------------------------------------ 3: health
+from app.journal_runner import HEALTHY_RATIO, TELEGRAM_UPLOAD_LIMIT, Health, backup_payload, journal_health  # noqa: E402
+
+
+def _scans(slot_starts: list[int], n: int) -> list[dict]:
+    """n scheduled reports written ~40s after each slot, as a real cycle would."""
+    return [{"ts_ms": s + 40_000 + i * 1_000, "source": "scheduled"} for s in slot_starts for i in range(n)]
+
+
+def test_a_healthy_week_reads_full():
+    first = _ms(2026, 9, 21, 0, 5)
+    slots = [first + i * H4 for i in range(42)]                     # a full week of 4h slots
+    h = journal_health(_scans(slots, 50), slots[-1] + 20 * 60_000, 50, 4, 5)   # 20 min after the last run
+    assert h is not None and h.slots == 42 and h.empty_slots == 0 and h.ratio == pytest.approx(1.0)
+
+
+def test_an_overdue_run_counts_as_missed():
+    """4h19m after the last run, the next one should already have happened."""
+    first = _ms(2026, 9, 21, 0, 5)
+    slots = [first + i * H4 for i in range(42)]
+    h = journal_health(_scans(slots, 50), slots[-1] + H4 + 19 * 60_000, 50, 4, 5)
+    assert h.empty_slots == 1
+
+
+def test_a_missed_run_is_caught():
+    """The failure this exists for: the VPS was down for one slot and nothing was written."""
+    first = _ms(2026, 9, 21, 0, 5)
+    slots = [first + i * H4 for i in range(12)]
+    ran = [s for i, s in enumerate(slots) if i != 5]
+    h = journal_health(_scans(ran, 50), slots[-1] + 20 * 60_000, 50, 4, 5)
+    assert h.empty_slots == 1 and h.slots == 12
+
+
+def test_partial_failures_show_as_a_low_ratio():
+    first = _ms(2026, 9, 21, 0, 5)
+    slots = [first + i * H4 for i in range(12)]
+    h = journal_health(_scans(slots, 30), slots[-1] + 20 * 60_000, 50, 4, 5)   # 30 of 50 succeed each run
+    assert h.empty_slots == 0 and h.ratio == pytest.approx(0.6)
+
+
+def test_a_new_journal_is_judged_from_its_first_run_not_a_week_back():
+    first = _ms(2026, 9, 21, 12, 5)
+    slots = [first + i * H4 for i in range(3)]
+    h = journal_health(_scans(slots, 50), slots[-1] + 20 * 60_000, 50, 4, 5)
+    assert h.slots == 3 and h.empty_slots == 0
+
+
+def test_the_slot_still_scanning_is_not_counted_as_missed():
+    first = _ms(2026, 9, 21, 0, 5)
+    slots = [first + i * H4 for i in range(4)]
+    h = journal_health(_scans(slots[:3], 50), slots[3] + 2 * 60_000, 50, 4, 5)   # 2 min into slot 4
+    assert h.slots == 3 and h.empty_slots == 0
+
+
+def test_manual_scans_do_not_count_towards_health():
+    rec = [{"ts_ms": _ms(2026, 9, 21, 0, 6), "source": "manual"}]
+    assert journal_health(rec, _ms(2026, 9, 22), 50, 4, 5) is None
+
+
+def test_the_digest_warns_on_a_missed_run(settings: Settings):
+    text = format_digest(ForwardReport(total=10, first_ts=_ms(2026, 9, 21)), settings,
+                         Health(slots=12, empty_slots=2, expected=600, actual=500))
+    assert "2 missed runs" in text and "was down" in text
+
+
+def test_the_digest_warns_on_widespread_failures(settings: Settings):
+    text = format_digest(ForwardReport(total=10, first_ts=_ms(2026, 9, 21)), settings,
+                         Health(slots=12, empty_slots=0, expected=600, actual=int(600 * (HEALTHY_RATIO - 0.1))))
+    assert "Many scans failed" in text
+
+
+def test_a_healthy_digest_has_no_warning(settings: Settings):
+    text = format_digest(ForwardReport(total=10, first_ts=_ms(2026, 9, 21)), settings,
+                         Health(slots=12, empty_slots=0, expected=600, actual=600))
+    assert "600 of 600 expected (100%)" in text and "⚠️" not in text
+
+
+# ------------------------------------------------------------------ 2: backup
+import gzip  # noqa: E402
+
+
+def test_the_backup_round_trips_exactly(tmp_path):
+    path = tmp_path / "signals.jsonl"
+    body = "".join(json.dumps({"ts_ms": i, "source": "scheduled"}) + "\n" for i in range(500))
+    path.write_text(body, encoding="utf-8")
+    data, name = backup_payload(path, now_ms=_ms(2026, 9, 21))
+    assert gzip.decompress(data) == path.read_bytes()     # byte-for-byte what is on disk
+    assert name == "signals-2026-09-21.jsonl.gz"
+    assert len(data) < len(body.encode()) / 4           # JSONL compresses well; keeps it far under the limit
+
+
+def test_an_empty_or_missing_journal_has_no_backup(tmp_path):
+    assert backup_payload(tmp_path / "missing.jsonl") is None
+    (tmp_path / "empty.jsonl").write_text("", encoding="utf-8")
+    assert backup_payload(tmp_path / "empty.jsonl") is None
+
+
+def test_send_backup_delivers_the_file(tmp_path, settings: Settings):
+    path = tmp_path / "signals.jsonl"
+    path.write_text(json.dumps({"ts_ms": 1}) + "\n", encoding="utf-8")
+    sent: list = []
+
+    async def backup(data: bytes, name: str) -> None:
+        sent.append((data, name))
+
+    runner = JournalRunner(settings, None, None, str(path), backup=backup)
+    result = asyncio.run(runner.send_backup())
+    assert len(sent) == 1 and sent[0][1].endswith(".jsonl.gz") and result.startswith("sent")
+
+
+def test_send_backup_refuses_a_file_over_the_limit(tmp_path, settings: Settings, monkeypatch):
+    path = tmp_path / "signals.jsonl"
+    path.write_text("x\n", encoding="utf-8")
+    sent: list = []
+
+    async def backup(data: bytes, name: str) -> None:
+        sent.append(name)
+
+    runner = JournalRunner(settings, None, None, str(path), backup=backup)
+    monkeypatch.setattr(runner, "backup_payload", lambda: (b"0" * (TELEGRAM_UPLOAD_LIMIT + 1), "big.gz"))
+    assert "over Telegram's limit" in asyncio.run(runner.send_backup())
+    assert sent == []
+
+
+def test_send_backup_without_a_destination_says_so(tmp_path, settings: Settings):
+    runner = JournalRunner(settings, None, None, str(tmp_path / "s.jsonl"))
+    assert asyncio.run(runner.send_backup()) == "no backup destination configured"

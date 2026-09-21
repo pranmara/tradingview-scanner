@@ -17,7 +17,7 @@ from app.clients.nansen import NansenClient
 from app.clients.tradingview_ws import ScriptInfo, TradingViewSessionClient
 from app.command_router import CommandRouter
 from app.config import Settings
-from app.journal_runner import JournalRunner
+from app.journal_runner import TELEGRAM_UPLOAD_LIMIT, JournalRunner
 from app.orchestrator import ScanError, ScanOrchestrator
 from app.schemas import ConfluenceReport, Side, Signal, Timeframe
 from app.study_advisor import Advice, StudyAdvisor
@@ -41,9 +41,14 @@ _USAGE = (
     "any flag you pass still wins, and <code>auto=off</code> skips it.\n"
     "<code>/indicators active</code> · <code>/indicators remove &lt;name&gt;</code> · <code>/indicators clear</code>\n\n"
     "<code>/status</code> — upstream health\n"
-    "<code>/journal</code> — forward-test digest: does the score rank outcomes on bars it hadn't seen?"
+    "<code>/journal</code> — forward-test digest: does the score rank outcomes on bars it hadn't seen?\n"
+    "<code>/journal backup</code> — send the journal file here (it also comes with every Monday digest)"
 )
 _SIGNAL_ICON = {Signal.BUY: "🟢 BUY", Signal.SELL: "🔴 SELL", Signal.WATCH: "🟡 WATCH", Signal.NEUTRAL: "⚪ NEUTRAL"}
+# The report prints levels, sizing and a trade plan, which reads as an instruction. It says what the evidence is.
+_UNVALIDATED = ("<i>Score not validated: backtests found no edge (AUC 0.48, docs/CALIBRATION.md). "
+                "Forward test running — /journal.</i>")
+HIGH_COST_R = 0.15   # above this, fees and slippage are a large share of the trade
 
 
 def fmt_price(p: float) -> str:
@@ -78,6 +83,10 @@ def format_report(r: ConfluenceReport) -> str:
     lines = [
         f"<b>{e(r.symbol)}</b> · {r.primary_timeframe.value} · {r.asset_class.value} — <b>{_SIGNAL_ICON[r.signal]}</b>",
         f"Score <b>{r.score:.0f}</b>/100 {_bar(r.score)}  (bull {r.bullish_score:.0f} / bear {r.bearish_score:.0f}, coverage {r.coverage_pct:.0f}%)",
+    ]
+    if r.signal is not Signal.NEUTRAL:
+        lines.append(_UNVALIDATED)
+    lines += [
         "",
         "<b>Confluence Matrix</b>",
     ]
@@ -103,6 +112,9 @@ def format_report(r: ConfluenceReport) -> str:
             f"RRR    <b>{lv.effective_rrr:.2f}</b>"
             + (f"  (structural target {fmt_price(lv.structural_target)})" if lv.structural_target is not None else ""),
         ]
+        if lv.round_trip_cost_r is not None:
+            warn = "  ⚠️ high at this stop distance" if lv.round_trip_cost_r >= HIGH_COST_R else ""
+            lines.append(f"Cost   ≈<b>{lv.round_trip_cost_r:.2f}R</b> round trip (fees + slippage){warn}")
         if lv.position_units is not None and lv.risk_amount is not None and lv.position_notional is not None:
             lines.append(f"Size   <code>{lv.position_units:.6g}</code> units ≈ ${lv.position_notional:,.0f}, risking ${lv.risk_amount:,.0f}")
     if r.regime:
@@ -336,12 +348,25 @@ def build_application(
         ]
         return "\n".join(lines)
 
-    async def cmd_journal(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    async def cmd_journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         msg = update.effective_message
         if msg is None or not authorised(update):
             return
         if journal is None:
             await msg.reply_text("The forward journal is off. Set JOURNAL_ENABLED=true in .env and restart.")
+            return
+        if (context.args or [""])[0].lower() == "backup":
+            payload = journal.backup_payload()
+            if payload is None:
+                await msg.reply_text("The journal is empty, so there's nothing to back up yet.")
+                return
+            data, name = payload
+            if len(data) > TELEGRAM_UPLOAD_LIMIT:
+                await msg.reply_text(f"The backup is {len(data) / 1e6:.0f} MB, over Telegram's limit. "
+                                     "Copy data/signals.jsonl off the VPS by hand.")
+                return
+            await msg.reply_document(document=data, filename=name,
+                                     caption=f"Forward journal, {len(data) / 1024:.0f} KB gzipped.")
             return
         pending = await msg.reply_text("📓 Scoring the journal against the candles that have arrived since...")
         try:

@@ -310,6 +310,8 @@ class Levels(BaseModel):
     risk_amount: float | None = None
     position_units: float | None = None
     position_notional: float | None = None
+    # Fees + slippage for one round trip, in R. Same formula the backtester charges, so the two agree.
+    round_trip_cost_r: float | None = None
 
 
 class ConfluenceReport(BaseModel):

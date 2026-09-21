@@ -64,7 +64,7 @@ Backtests include all of this automatically (no look-ahead: every detector uses 
 
 Things that are deliberately **not** in the score: news, funding rates, order-book data, and sentiment. They are useful but need separate feeds; if you add them, treat them as vetoes first and points second.
 
-**Honest expectations — now measured, not assumed.** The matrix was calibrated against 22k evaluations and 2,884 simulated trades across 8 crypto markets: **the score does not rank setups (AUC 0.48) and no configuration was profitable out of sample.** One pre-registered config produced +51R in training and −0.133R per trade on held-out data. Read [docs/CALIBRATION.md](docs/CALIBRATION.md) before trusting any signal this produces, and keep `EXECUTION_ENABLED=false` until you have validated on your own instruments. The one change that did survive: exit flat at TP2 rather than scaling out, worth ~0.2R per trade.
+**Honest expectations — now measured, not assumed.** The matrix was calibrated against 22k evaluations and 2,884 simulated trades across 8 crypto markets: **the score does not rank setups (AUC 0.48) and no configuration was profitable out of sample.** One pre-registered config produced +51R in training and −0.133R per trade on held-out data. Read [docs/CALIBRATION.md](docs/CALIBRATION.md) before trusting any signal this produces, and keep `EXECUTION_ENABLED=false` until you have validated on your own instruments. The one change that did survive: exit flat at TP2 rather than scaling out, worth ~0.2R per trade. Every report now prints its **round-trip cost in R** (fees and slippage divided by the stop distance, flagged at 0.15R and above — a 1.2% stop costs ~0.21R before the trade does anything), and any report showing a trade plan carries a one-line note that the score is not validated.
 
 ## Backtesting: does the scanner produce what it claims?
 
@@ -209,6 +209,10 @@ after it is scanned. That is the price of an answer that cannot have been fitted
 Your own `/scan` reports are journaled too, tagged `manual`, but kept out of the calibration: you choose what to
 scan, and that choice is a biased sample.
 
+**It watches itself.** Every digest opens with `Scans this week: 2,100 of 2,100 expected (100%) · 0 missed runs`. A run that wrote nothing at all means the runner or the VPS was down; a low ratio means a data source changed. Either gets a warning, so a silent failure surfaces within a week instead of as a quietly thin sample.
+
+**It backs itself up off the VPS.** Backtest data can always be downloaded again; forward data cannot. Every Monday digest arrives with `signals-YYYY-MM-DD.jsonl.gz` attached, and `/journal backup` sends one on demand. JSONL compresses about tenfold, so it stays far inside Telegram's 50 MB bot limit for years.
+
 ## Connecting your TradingView account
 
 TradingView has no official API for chart or indicator data, so there are two routes:
@@ -347,6 +351,7 @@ Without a domain: `docker compose up -d --build` (base file only) runs bot + Red
 | Backup | `tar czf scanner-backup.tgz /opt/tradingview-scanner/.env /opt/tradingview-scanner/data` |
 | Backtest on the server | `docker compose exec app python -m app.backtest BTCUSDT --tf 4h --bars 1500` |
 | Forward-journal digest now | `/journal` in Telegram, or `docker compose exec app python -m app.backtest --journal data/signals.jsonl` |
+| Copy of the journal | `/journal backup` in Telegram (also attached to every Monday digest) |
 | See every TypeSafe request | `docker compose logs -f app \| grep '"msg": "typesafe call"'` |
 
 **Crypto candle sources.** Binance first, then Bybit for anything Binance does not list — Bybit spot, then the linear perpetual, since a new token often trades as a perp long before it gets a spot pair. Both are public endpoints needing no key, and the report's *Sources* line names which one answered (`bybit-spot`, `bybit-linear`). `/status` shows both. Set `BYBIT_ENABLED=false` to pin it to Binance only.

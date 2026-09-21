@@ -439,6 +439,11 @@ class DecisionEngine:
             return None
         effective = min(TP_MULTIPLES[1], rrr_struct) if rrr_struct is not None else TP_MULTIPLES[1]
 
+        # (2 x fee + slippage) as a fraction of price, divided by the stop distance: the backtester's exact charge.
+        # A 1.2% stop at 25 bps costs ~0.21R before the trade does anything — the largest effect measured.
+        cost_frac = (2 * self._s.backtest_fee_bps + self._s.backtest_slippage_bps) / 10_000.0
+        cost_r = cost_frac * entry / risk
+
         risk_amount = units = notional = None
         if self._s.account_equity > 0:
             risk_amount = self._s.account_equity * self._s.risk_per_trade_pct / 100.0
@@ -450,6 +455,7 @@ class DecisionEngine:
             risk_per_unit=risk, stop_distance_pct=risk / entry * 100.0, stop_basis=basis, rrr_tp2=TP_MULTIPLES[1],
             structural_target=target, rrr_structural=rrr_struct, effective_rrr=effective,
             risk_amount=risk_amount, position_units=units, position_notional=notional,
+            round_trip_cost_r=cost_r,
         )
 
     def _execution_points(self, lv: Levels | None) -> tuple[float, list[str], list[str]]:
