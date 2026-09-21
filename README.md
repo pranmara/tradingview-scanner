@@ -167,30 +167,44 @@ tuned to. The journal can't be: it records each report *before* its outcome exis
 arrive.
 
 It runs inside the app, no cron and no extra container. Five minutes after every 4h candle closes it scans the
-watchlist and appends **every** report to `data/signals.jsonl` — NEUTRAL included, because the question is whether
+50-symbol watchlist and appends **every** report to `data/signals.jsonl` — NEUTRAL included, because the question is whether
 the score ranks outcomes and that needs the whole distribution. Every Monday at 08:00 UTC it posts a digest to each
 user in `TELEGRAM_ALLOWED_USER_IDS`; `/journal` shows it on demand.
 
 ```
 📓 Forward journal
-Since 2026-09-21: 3,024 reports (2,988 scheduled, 36 manual)
-Independent observations: 156 (142 resolved, 14 pending)
-AUC 0.512 (95% CI 0.418–0.606) → not distinguishable from a coin flip
-Base rate: 13.4% of resolved observations reached TP2
+Since 2026-09-21: 12,600 reports (12,564 scheduled, 36 manual)
+
+Does the score rank this week's names against each other?
+Mean IC +0.012 · t = 0.61 over 9 weeks · 56% of weeks positive → no measurable ranking
+
+Pooled hit rate
+Observations: 450 (410 resolved, 40 pending)
+AUC 0.512 (95% CI 0.458–0.566) → not distinguishable from a coin flip
 ```
+
+**The watchlist** is the 50 most liquid Binance spot USDT pairs with at least 400 days of history and non-pegged
+volatility — filtered on data, not names, which is what caught a stablecoin, tokenized stocks and tokenized gold
+that name-matching missed. It is **frozen**: recomputing "top 50" on every scan would add coins mid-rally and bias
+the sample towards momentum.
+
+**Why 50 names needed a different statistic.** Crypto moves together, so 50 coins in one week are nowhere near
+50 independent observations — and the pooled AUC's interval assumes they are. The headline is therefore a
+within-week ranking: each week the score's order is compared with the realised R across that week's names,
+which cancels the shared market move, and each week counts once. The pooled figure stays as context, labelled
+optimistic.
 
 It is deliberately isolated from everything that could cost you:
 
 | | |
 |---|---|
 | **Execution** | its own settings copy with `EXECUTION_ENABLED=false` — it structurally cannot dispatch an order |
-| **Your TradingView account** | public data only (Binance → Bybit → scanner REST); 72 automated scans a day never touch your session cookie |
+| **Your TradingView account** | public data only (Binance → Bybit → scanner REST); 300 automated scans a day never touch your session cookie |
 | **Credits** | Nansen off, no TypeSafe calls |
 | **Honesty** | one observation per symbol per ISO week, since a 40-bar outcome would overlap consecutive 4h scans and fake a tight interval. A trade whose time stop hasn't elapsed stays *pending*, never scored at today's close. Below 50 resolved observations the digest refuses to give a verdict. |
 
-**Expect it to take months.** Twelve symbols give twelve independent observations a week, so the 50-observation
-floor arrives in about a month and a result worth acting on in three to six. That is the price of an answer that
-cannot have been fitted.
+**Expect it to take about two months.** A verdict needs 8 resolved weeks, and each week resolves about a week
+after it is scanned. That is the price of an answer that cannot have been fitted.
 
 Your own `/scan` reports are journaled too, tagged `manual`, but kept out of the calibration: you choose what to
 scan, and that choice is a biased sample.

@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 # than the evidence is.
 
 MIN_RESOLVED_TO_JUDGE = 50
+MIN_NAMES_PER_WEEK = 10    # a within-week ranking of fewer names than this is too noisy to count
+MIN_WEEKS_TO_JUDGE = 8     # weeks are the independent unit, so the verdict waits on weeks, not rows
 HOUR_MS = 3_600_000
 
 Notify = Callable[[str], Awaitable[None]]
@@ -115,6 +117,7 @@ class ForwardReport:
     auc: tuple[float, float, float] | None = None
     trades: list[float] = field(default_factory=list)
     trades_pending: int = 0
+    ic_weeks: list[float] = field(default_factory=list)
 
 
 def forward_report(records: list[dict[str, Any]], candles_for: dict[tuple[str, str], pd.DataFrame],
@@ -131,21 +134,34 @@ def forward_report(records: list[dict[str, Any]], candles_for: dict[tuple[str, s
     sample = weekly_sample(usable)
     rep.independent = len(sample)
     scores, hits = [], []
+    by_week: dict[tuple[int, int], list[tuple[float, float]]] = {}
     for rec in sample:
         df = candles_for.get((rec["symbol"], rec["timeframe"]))
         if df is None:
             rep.pending += 1
             continue
-        outcome, _ = resolve(rec, df, time_stop_bars)
-        if outcome == "pending":
+        outcome, r = resolve(rec, df, time_stop_bars)
+        if outcome == "pending" or r is None:
             rep.pending += 1
             continue
         scores.append(rec["score"])
         hits.append(outcome == "tp2")
+        iso = datetime.fromtimestamp(rec["ts_ms"] / 1000, UTC).isocalendar()
+        by_week.setdefault((iso.year, iso.week), []).append((rec["score"], r))
     rep.resolved = len(hits)
     if hits:
         rep.base_rate = sum(hits) / len(hits)
         rep.auc = auc_with_ci(scores, hits)
+
+    # Names in the same week share the market's move, so they are not independent observations. Ranking them
+    # against each other within the week cancels that shared move, and each week then counts once.
+    for _, pairs in sorted(by_week.items()):
+        if len(pairs) < MIN_NAMES_PER_WEEK:
+            continue
+        x, y = np.array([p[0] for p in pairs]), np.array([p[1] for p in pairs])
+        rx, ry = _rank(x), _rank(y)
+        if rx.std() > 0 and ry.std() > 0:
+            rep.ic_weeks.append(float(np.corrcoef(rx, ry)[0, 1]))
 
     for rec in usable:   # actual BUY/SELL calls, every one of them — they are rare enough not to overlap much
         if rec.get("signal") not in ("BUY", "SELL"):
@@ -171,10 +187,26 @@ def format_digest(rep: ForwardReport, settings: Settings) -> str:
         f"Watchlist: {len(settings.journal_symbols)} symbols · {e(settings.journal_timeframe)} · "
         f"every {settings.journal_interval_hours}h",
         "",
-        "<b>Does the score rank outcomes?</b>",
-        f"<i>TP2 hit before SL within {settings.backtest_time_stop_bars} bars · one scheduled observation per "
-        f"symbol per week</i>",
-        f"Independent observations: {rep.independent} ({rep.resolved} resolved, {rep.pending} pending)",
+        "<b>Does the score rank this week's names against each other?</b>",
+        "<i>Spearman IC of score vs realised R within each week · each week counts once</i>",
+    ]
+    weeks = np.array(rep.ic_weeks)
+    if len(weeks) < MIN_WEEKS_TO_JUDGE:
+        lines.append(f"⏳ {len(weeks)} of {MIN_WEEKS_TO_JUDGE} resolved weeks with ≥{MIN_NAMES_PER_WEEK} names. "
+                     f"Keep collecting.")
+    else:
+        t_ic = weeks.mean() / (weeks.std(ddof=1) / math.sqrt(len(weeks))) if weeks.std() > 0 else float("nan")
+        verdict = ("the score ranks outcomes" if t_ic > 2 else
+                   "the score ranks outcomes backwards" if t_ic < -2 else
+                   "no measurable ranking")
+        lines.append(f"Mean IC <b>{weeks.mean():+.3f}</b> · t = {t_ic:.2f} over {len(weeks)} weeks · "
+                     f"{100 * (weeks > 0).mean():.0f}% of weeks positive → {verdict}")
+    lines += [
+        "",
+        "<b>Pooled hit rate</b>",
+        f"<i>TP2 before SL within {settings.backtest_time_stop_bars} bars · one observation per symbol per week. "
+        f"Its interval assumes names are independent, which same-week crypto is not — read it as optimistic.</i>",
+        f"Observations: {rep.independent} ({rep.resolved} resolved, {rep.pending} pending)",
     ]
     if rep.resolved < MIN_RESOLVED_TO_JUDGE:
         lines.append(f"⏳ Too few resolved to judge — need {MIN_RESOLVED_TO_JUDGE}, have {rep.resolved}. Keep collecting.")
@@ -289,5 +321,5 @@ class JournalRunner:
                 logger.exception("journal cycle failed")
 
 
-__all__ = ["JournalRunner", "ForwardReport", "auc_with_ci", "format_digest", "forward_report",
+__all__ = ["MIN_NAMES_PER_WEEK", "MIN_WEEKS_TO_JUDGE", "JournalRunner", "ForwardReport", "auc_with_ci", "format_digest", "forward_report",
            "is_digest_slot", "next_slot_ms", "resolve", "weekly_sample"]

@@ -294,3 +294,59 @@ def test_the_runner_rejects_an_unknown_timeframe(settings: Settings):
 def test_the_watchlist_is_deduplicated_and_normalised(settings: Settings):
     s = settings.model_copy(update={"journal_watchlist": " btcusdt, ETHUSDT ,BTCUSDT,,"})
     assert s.journal_symbols == ("BTCUSDT", "ETHUSDT")
+
+
+# ------------------------------------------------------------------ within-week cross-sectional IC
+from app.journal_runner import MIN_NAMES_PER_WEEK, MIN_WEEKS_TO_JUDGE  # noqa: E402
+
+
+def _week(week_start: int, n: int, outcome_for) -> tuple[list[dict], dict]:  # noqa: ANN001
+    """n names scanned at the same slot; outcome_for(i) decides whether name i hits TP2 or its stop."""
+    recs, frames = [], {}
+    for i in range(n):
+        sym = f"C{i:02d}USDT"
+        recs.append(_rec(week_start, symbol=sym, score=float(i)))
+        hit = outcome_for(i)
+        highs = [100, 130] + [100] * 58 if hit else [100] * 60
+        lows = [100] * 60 if hit else [100, 85] + [100] * 58
+        frames[(sym, "4h")] = _frame(week_start, [100] * 60, highs=highs, lows=lows)
+    return recs, frames
+
+
+def test_a_week_where_score_orders_the_outcomes_scores_positive_ic():
+    recs, frames = _week(_ms(2026, 1, 5), 20, lambda i: i >= 10)   # top half by score wins
+    rep = forward_report(recs, frames, 40)
+    assert len(rep.ic_weeks) == 1 and rep.ic_weeks[0] > 0.8
+
+
+def test_a_week_with_too_few_names_is_not_counted():
+    recs, frames = _week(_ms(2026, 1, 5), MIN_NAMES_PER_WEEK - 1, lambda i: i % 2 == 0)
+    assert forward_report(recs, frames, 40).ic_weeks == []
+
+
+def test_a_market_wide_move_is_not_mistaken_for_ranking():
+    """Every name wins together: the shared move is real, but it says nothing about which name the score picks."""
+    recs, frames = _week(_ms(2026, 1, 5), 20, lambda i: True)
+    rep = forward_report(recs, frames, 40)
+    assert rep.base_rate == 1.0            # the pooled hit rate sees the whole market going up...
+    assert rep.ic_weeks == []              # ...and the within-week ranking correctly has nothing to rank
+
+
+def test_the_digest_waits_for_enough_weeks(settings: Settings):
+    rep = ForwardReport(total=500, first_ts=_ms(2026, 9, 1), ic_weeks=[0.4, 0.5, 0.3])
+    text = format_digest(rep, settings)
+    assert f"3 of {MIN_WEEKS_TO_JUDGE} resolved weeks" in text and "Keep collecting" in text
+
+
+def test_consistent_positive_weeks_read_as_ranking(settings: Settings):
+    rep = ForwardReport(total=5000, first_ts=_ms(2026, 6, 1), ic_weeks=[0.12, 0.09, 0.15, 0.11, 0.08, 0.13, 0.10, 0.14])
+    assert "the score ranks outcomes" in format_digest(rep, settings)
+
+
+def test_weeks_that_cancel_read_as_no_ranking(settings: Settings):
+    rep = ForwardReport(total=5000, first_ts=_ms(2026, 6, 1), ic_weeks=[0.1, -0.1, 0.05, -0.08, 0.02, -0.03, 0.06, -0.05])
+    assert "no measurable ranking" in format_digest(rep, settings)
+
+
+def test_the_pooled_interval_is_labelled_as_optimistic(settings: Settings):
+    assert "read it as optimistic" in format_digest(ForwardReport(total=1, first_ts=_ms(2026, 9, 1)), settings)

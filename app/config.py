@@ -133,7 +133,9 @@ class Settings(BaseSettings):
     # Forward journal: scans a fixed watchlist on a fixed calendar and records every report, so the score can be
     # judged on bars that had not happened when it was computed. Public data only, never executes, no Nansen.
     journal_enabled: bool = True
-    journal_watchlist: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,DOTUSDT,LTCUSDT,NEARUSDT,ATOMUSDT"
+    # Frozen 2026-09-21: the 50 most liquid Binance spot USDT pairs with >= 400 days of history and non-pegged
+    # volatility. Frozen on purpose: recomputing "top 50" each scan would add coins mid-rally and bias the sample.
+    journal_watchlist: str = "BTCUSDT,ETHUSDT,NEARUSDT,ZECUSDT,SOLUSDT,XRPUSDT,SUIUSDT,AVAXUSDT,BNBUSDT,ENAUSDT,DOGEUSDT,UNIUSDT,PROVEUSDT,ONEUSDT,TAOUSDT,ADAUSDT,ARBUSDT,SAGAUSDT,LINKUSDT,TRXUSDT,PEPEUSDT,HBARUSDT,GUSDT,WLDUSDT,ONDOUSDT,LTCUSDT,FETUSDT,XLMUSDT,TRUMPUSDT,STRKUSDT,CAKEUSDT,AAVEUSDT,INJUSDT,SEIUSDT,POLUSDT,APTUSDT,FILUSDT,ARUSDT,RENDERUSDT,DASHUSDT,DOTUSDT,CELRUSDT,BCHUSDT,LUNAUSDT,ICPUSDT,OPUSDT,LSKUSDT,NILUSDT,EPICUSDT,ALGOUSDT"
     journal_timeframe: str = "4h"
     journal_interval_hours: int = 4
     journal_offset_minutes: int = 5    # after the bar closes, so every scan sees a completed candle
