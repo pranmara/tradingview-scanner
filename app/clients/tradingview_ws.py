@@ -34,7 +34,10 @@ logger = logging.getLogger(__name__)
 WS_URL = "wss://data.tradingview.com/socket.io/websocket?from=chart"
 _ORIGIN = "https://data.tradingview.com"
 _UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-_LIST_FILTERS = ("saved", "favorites", "invite_only")
+# Only "saved" works. Verified 2026-09-21: pine-facade answers HTTP 400 "Bad 'filter' value" to "favorites" and
+# "invite_only", and "all" is built-ins plus TradingView partner add-ons — never a user's invite-only grants.
+# Invite-only scripts are reachable only by pine id (PUB;...), which /indicators add accepts.
+_LIST_FILTERS = ("saved",)
 _FRAME = re.compile(r"~m~\d+~m~")
 _AUTH_TOKEN = re.compile(r'"auth_token":"([^"]+)"')
 
@@ -196,7 +199,7 @@ class TradingViewSessionClient:
         return OHLCV(symbol=symbol, timeframe=timeframe, candles=ordered[-limit:], source="tv-session")
 
     async def list_scripts(self) -> list[ScriptInfo]:
-        """Scripts available to the logged-in account (own, favourited, invite-only)."""
+        """The account's own saved scripts. Invite-only scripts cannot be listed — add them by pine id."""
         if not self.authenticated:
             raise UpstreamError("TradingView session not configured (set TV_SESSION_ID)")
         seen: dict[str, ScriptInfo] = {}
@@ -209,7 +212,9 @@ class TradingViewSessionClient:
                 logger.warning("pine-facade list failed", extra={"filter": flt, "error": str(exc)})
                 continue
             if resp.status_code != 200:
-                logger.info("pine-facade list filter unavailable", extra={"filter": flt, "status": resp.status_code})
+                # Warning, not info: a rejected filter silently hid invite-only scripts from /indicators.
+                logger.warning("pine-facade list filter rejected",
+                               extra={"filter": flt, "status": resp.status_code, "body": resp.text[:160]})
                 continue
             try:
                 rows = resp.json()

@@ -233,7 +233,8 @@ python -m app.clients.tradingview_ws BINANCE:BTCUSDT 240 --study "USER;012345678
 Selecting indicators from Telegram (once `TV_SESSION_ID` is set):
 
 ```
-/indicators                         # numbered list of scripts on your account (own, favourites, invite-only)
+/indicators                         # numbered list of your own saved scripts
+/indicators add PUB;xxxxxxxx        # invite-only scripts: TradingView won't list them, so add by id
 /indicators add 3 plot=plot_0 above=0 below=0 points=6      # activate #3; bullish when plot_0 > 0, bearish when < 0
 /indicators add USER;abc123 plot=Signal above=55 below=45 in.Length=20 as=MyOsc
 /indicators active                  # what /scan will pull

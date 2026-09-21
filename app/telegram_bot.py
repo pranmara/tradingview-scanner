@@ -35,7 +35,7 @@ _USAGE = (
     "With TYPESAFE_API_KEY set you can also just ask: <i>is btc worth a long on the 4h</i> — "
     "plain messages work too, no slash needed.\n\n"
     "<b>Account indicators</b> (needs TV_SESSION_ID)\n"
-    "<code>/indicators</code> — list scripts on your TradingView account\n"
+    "<code>/indicators</code> — list your own saved scripts (invite-only scripts: add by id, see below)\n"
     "<code>/indicators add &lt;n|pine_id&gt; [plot=plot_0 above=0 below=0 points=5 bucket=indicators age=2 in.Length=20]</code>\n"
     "With TYPESAFE_API_KEY set, <code>add</code> picks bucket / plot / thresholds / points from the script itself; "
     "any flag you pass still wins, and <code>auto=off</code> skips it.\n"
@@ -407,6 +407,9 @@ def build_application(
             if len(scripts) > 60:
                 lines.append(f"… {len(scripts) - 60} more")
             lines.append("\nActivate with <code>/indicators add &lt;n&gt; plot=plot_0 above=0 below=0 points=5</code>")
+            lines.append("<i>Invite-only scripts can't be listed by TradingView — add them by id: "
+                         "<code>/indicators add PUB;xxxxxxxx</code>. The id is in the browser's network tab "
+                         "(filter <code>translate</code>) on a chart that has the script applied.</i>")
             await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
             return
 
