@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -17,6 +18,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_CATEGORIES: tuple[str, ...] = ("spot", "linear")
 _MAX_LIMIT = 1000
 _RETRYABLE_CODES = frozenset({10002, 10006, 10016, 10018})  # timestamp skew, rate limit, service busy
+_OI_PAGE = 200
+OI_INTERVALS = frozenset({"5min", "15min", "30min", "1h", "4h", "1d"})
+
+
+@dataclass(frozen=True)
+class OpenInterestPoint:
+    ts: int     # epoch ms
+    oi: float   # contracts, in coin units — deliberately not USD, so a price move cannot change it
 
 
 class BybitClient:
@@ -93,6 +102,45 @@ class BybitClient:
                 return OHLCV(symbol=symbol, timeframe=timeframe, candles=collected[-bars:], source=f"bybit-{category}")
         raise UpstreamError(f"bybit returned no history for {symbol}")
 
+    @with_retry()
+    async def _oi_page(self, symbol: str, interval: str, end_ms: int | None) -> list[OpenInterestPoint]:
+        params: dict[str, Any] = {"category": "linear", "symbol": symbol, "intervalTime": interval, "limit": _OI_PAGE}
+        if end_ms is not None:
+            params["endTime"] = end_ms
+        resp = await self._http.get(f"{self._base}/v5/market/open-interest", params=params)
+        raise_for_status(resp)
+        body = resp.json()
+        code = int(body.get("retCode", -1))
+        if code != 0:
+            message = str(body.get("retMsg", "unknown error"))[:160]
+            if code in _RETRYABLE_CODES:
+                raise RetryableError(f"bybit open interest retCode {code}: {message}")
+            raise UpstreamError(f"bybit open interest retCode {code}: {message}")
+        rows = (body.get("result") or {}).get("list") or []
+        return [OpenInterestPoint(ts=int(r["timestamp"]), oi=float(r["openInterest"])) for r in rows]
+
+    async def open_interest_history(self, symbol: str, interval: str = "1d",
+                                    start_ms: int | None = None) -> list[OpenInterestPoint]:
+        """Linear-perp open interest, oldest first. Binance keeps only 30 days of this; Bybit keeps years,
+        which makes it the free source for any open-interest backtest."""
+        if interval not in OI_INTERVALS:
+            raise ValueError(f"interval must be one of {sorted(OI_INTERVALS)}")
+        collected: list[OpenInterestPoint] = []
+        end_ms: int | None = None
+        while True:
+            page = await self._oi_page(symbol, interval, end_ms)      # newest first
+            if not page:
+                break
+            fresh = [p for p in page if not collected or p.ts < collected[0].ts]
+            collected = sorted(fresh, key=lambda p: p.ts) + collected
+            oldest = min(p.ts for p in page)
+            if len(page) < _OI_PAGE or (start_ms is not None and oldest <= start_ms) or not fresh:
+                break
+            end_ms = oldest - 1
+        if start_ms is not None:
+            collected = [p for p in collected if p.ts >= start_ms]
+        return collected
+
     async def ping(self) -> bool:
         try:
             resp = await self._http.get(f"{self._base}/v5/market/time", timeout=5.0)
@@ -101,4 +149,4 @@ class BybitClient:
             return False
 
 
-__all__ = ["BybitClient", "DEFAULT_CATEGORIES"]
+__all__ = ["BybitClient", "DEFAULT_CATEGORIES", "OI_INTERVALS", "OpenInterestPoint"]

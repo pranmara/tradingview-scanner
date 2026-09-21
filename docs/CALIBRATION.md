@@ -224,6 +224,64 @@ and test it only on data that arrives afterwards.
 
 ---
 
+## 7. H2 — short build-up: nothing
+
+Pre-registered before any open-interest data was fetched: when open interest rises while price falls, shorts
+are piling in, and those perps should outperform as they get squeezed. The signal is
+`S = z(ΔOI) − z(ΔP)`, measured on Bybit linear open interest in contract units, so price moves cannot change
+it mechanically. 82 perps, 233 weekly rebalances, a median of 56 names per date, 2022-03 to 2026-09.
+
+The signal contains price — "price fell" is half of it — so it was only accepted if it beat a price-only
+reversal control (A5).
+
+| | signal | mean IC | t(IC) | net spread | t(net) |
+|---|---|---|---|---|---|
+| TRAIN | S | −0.0023 | −0.16 | −0.716% | −0.83 |
+| TRAIN | price-only control | +0.0218 | 1.22 | −0.209% | −0.23 |
+| HOLDOUT | S | −0.0181 | −1.05 | −0.749% | −0.65 |
+| HOLDOUT | price-only control | −0.0194 | −0.93 | −2.396% | −1.92 |
+
+**Not accepted. All five criteria failed**, including A5: open interest added nothing beyond price. The
+by-year IC changes sign from year to year with no pattern.
+
+On its own, ΔOI shows IC −0.024 (t = −2.32): rising open interest goes with slightly *lower* returns, the
+opposite of the squeeze story and consistent with H1's finding that crowded positioning underperforms. It was
+a secondary readout measured over the whole period with no holdout, and its tradeable spread is t = 0.29, so
+treat it as a curiosity.
+
+Caveat: the open-interest window starts in 2022, so it misses 2021, H1's strongest year. But 2022 was H1's
+second strongest year, and S showed nothing there either (IC −0.028).
+
+---
+
+## 8. The one reliable number, and why it isn't an edge either
+
+H1's carry was collected at t = 14; it lost only because *price* moved against a long/short book built from
+*different* coins. Holding spot and shorting the perp on the *same* coin cancels the price exposure and leaves
+the funding. That is the well-known cash-and-carry trade. Funding a short-perp holder received, annualised:
+
+| year | BTC + ETH | % of prints negative | all 87 perps |
+|---|---|---|---|
+| 2019 | 7.8% | 15% | 7.0% |
+| 2020 | 22.3% | 8% | 15.7% |
+| 2021 | 34.1% | 6% | 35.2% |
+| 2022 | 2.5% | 28% | −1.9% |
+| 2023 | 8.1% | 10% | 6.7% |
+| 2024 | 12.4% | 6% | 9.1% |
+| 2025 | 5.0% | 15% | −1.6% |
+| 2026 | 2.3% | 29% | −4.7% |
+
+**This is descriptive, not a backtest.** It is gross of spot trading fees, hedge rebalancing, margin, the
+capital tied up in spot, and exchange counterparty risk. It measures how big the pool is.
+
+It is a yield, not a trading edge: the trade gets paid for supplying leverage to longs. It is heavily
+dependent on regime — 34% in the 2021 mania, 2.5% in 2022 — and it has compressed the same way H1 decayed. In
+2026 BTC + ETH paid 2.3% gross, with 29% of prints negative, and across the wider perp universe it turned
+negative in 2025. At current levels, compare it with what cash earns risk-free before taking exchange risk
+to collect it.
+
+---
+
 ## Caveats that apply to all of the above
 
 - **Crypto only.** Yahoo rate-limited every equity attempt, so no stock is in any sample.

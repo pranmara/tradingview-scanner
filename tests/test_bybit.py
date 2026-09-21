@@ -220,3 +220,64 @@ def test_the_scanner_uses_the_fallback_when_the_first_choice_is_absent() -> None
     client = TradingViewScannerClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     snap = run(client.get_snapshot(["BINANCE:HYPEUSDT", "BYBIT:HYPEUSDT"], Timeframe.H1, True))
     assert snap is not None and snap.symbol == "BYBIT:HYPEUSDT"
+
+
+# ------------------------------------------------------------------ open interest
+def _oi(ts: int, oi: float) -> dict:
+    return {"openInterest": str(oi), "singleOpenInterest": str(oi / 2), "timestamp": str(ts)}
+
+
+def _oi_ok(rows: list[dict]) -> dict:
+    return {"retCode": 0, "retMsg": "OK", "result": {"symbol": "XYZUSDT", "category": "linear", "list": rows}}
+
+
+def test_open_interest_comes_back_oldest_first():
+    rows = [_oi(3000, 30.0), _oi(2000, 20.0), _oi(1000, 10.0)]   # v5 is newest first
+    out = run(_client(lambda r: httpx.Response(200, json=_oi_ok(rows))).open_interest_history("XYZUSDT"))
+    assert [(p.ts, p.oi) for p in out] == [(1000, 10.0), (2000, 20.0), (3000, 30.0)]
+
+
+def test_open_interest_pages_backwards_until_a_short_page():
+    ends: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        end = request.url.params.get("end") or request.url.params.get("endTime")
+        ends.append(end)
+        if end is None:  # first call: a full page, newest first
+            return httpx.Response(200, json=_oi_ok([_oi(100_000 - 100 * i, 1.0) for i in range(200)]))
+        return httpx.Response(200, json=_oi_ok([_oi(50, 1.0)]))
+
+    out = run(_client(handler).open_interest_history("XYZUSDT"))
+
+    assert len(ends) == 2 and ends[1] == str(100_000 - 100 * 199 - 1)
+    assert len(out) == 201 and out[0].ts == 50
+    assert [p.ts for p in out] == sorted(p.ts for p in out)
+
+
+def test_open_interest_sends_linear_category_and_interval():
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(dict(request.url.params))
+        return httpx.Response(200, json=_oi_ok([_oi(1000, 1.0)]))
+
+    run(_client(handler).open_interest_history("XYZUSDT", "4h"))
+    assert seen["category"] == "linear" and seen["intervalTime"] == "4h"
+
+
+def test_open_interest_stops_at_start_ms_and_trims():
+    rows = [_oi(5000 - 10 * i, 1.0) for i in range(200)]   # 5000 .. 3010, full page
+
+    out = run(_client(lambda r: httpx.Response(200, json=_oi_ok(rows))).open_interest_history("XYZUSDT", start_ms=4000))
+    assert out[0].ts >= 4000
+
+
+def test_open_interest_rejects_an_unknown_interval():
+    with pytest.raises(ValueError):
+        run(_client(lambda r: httpx.Response(200, json=_oi_ok([]))).open_interest_history("XYZUSDT", "2h"))
+
+
+def test_open_interest_business_error_is_raised():
+    body = {"retCode": 10001, "retMsg": "symbol invalid", "result": {}}
+    with pytest.raises(UpstreamError):
+        run(_client(lambda r: httpx.Response(200, json=body)).open_interest_history("NOPEUSDT"))
