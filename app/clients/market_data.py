@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 from collections.abc import Awaitable, Callable
 
 from app.asset_classifier import AssetInfo
@@ -15,6 +16,9 @@ from app.clients.yahoo import YahooClient
 from app.config import Settings
 from app.resilience import UpstreamError
 from app.schemas import OHLCV, TechnicalSnapshot, Timeframe
+
+if TYPE_CHECKING:
+    import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -152,3 +156,16 @@ class CompositeMarketDataProvider:
             "bybit": bybit,
             "twelvedata": "configured" if self._twelvedata is not None else "disabled",
         }
+
+
+def public_market_provider(http: "httpx.AsyncClient", settings: Settings) -> CompositeMarketDataProvider:
+    """Public endpoints only — no TradingView session and no MCP. Two reasons: the output is reproducible
+    (backtests and the forward journal measure the same thing), and scheduled scans never load the user's
+    TradingView account, which heavy automated use can get rate-limited."""
+    return CompositeMarketDataProvider(
+        settings, BinanceClient(http), YahooClient(http),
+        TradingViewScannerClient(http, settings.tv_scanner_stock_market),
+        twelvedata=TwelveDataClient(http, settings.twelvedata_api_key.get_secret_value())
+        if settings.twelvedata_api_key else None,
+        bybit=BybitClient(http, settings.bybit_base_url) if settings.bybit_enabled else None,
+    )

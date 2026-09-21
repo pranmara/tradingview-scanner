@@ -130,6 +130,16 @@ class Settings(BaseSettings):
     typesafe_symbol_cache_ttl_seconds: int = 30 * 86_400
     typesafe_indicator_min_confidence: float = 0.7   # a wrong match scores into the wrong bucket
 
+    # Forward journal: scans a fixed watchlist on a fixed calendar and records every report, so the score can be
+    # judged on bars that had not happened when it was computed. Public data only, never executes, no Nansen.
+    journal_enabled: bool = True
+    journal_watchlist: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,DOTUSDT,LTCUSDT,NEARUSDT,ATOMUSDT"
+    journal_timeframe: str = "4h"
+    journal_interval_hours: int = 4
+    journal_offset_minutes: int = 5    # after the bar closes, so every scan sees a completed candle
+    journal_digest_weekday: int = 0    # Monday; 0-6
+    journal_digest_hour_utc: int = 8
+
     # Backtest defaults
     backtest_fee_bps: float = 10.0
     backtest_slippage_bps: float = 5.0
@@ -180,6 +190,18 @@ class Settings(BaseSettings):
     def typesafe_active(self) -> bool:
         """A key is configured. Each feature still gates on its own flag."""
         return self.typesafe_api_key is not None
+
+    @property
+    def journal_symbols(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(p.strip().upper() for p in self.journal_watchlist.split(",") if p.strip()))
+
+    @field_validator("journal_interval_hours")
+    @classmethod
+    def _interval_divides_a_day(cls, v: int) -> int:
+        # Slots are anchored to 00:00 UTC, so the interval has to tile the day or the grid drifts.
+        if v <= 0 or 24 % v:
+            raise ValueError("JOURNAL_INTERVAL_HOURS must divide 24 (1, 2, 3, 4, 6, 8, 12 or 24)")
+        return v
 
     @property
     def execution_live(self) -> bool:

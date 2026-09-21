@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -12,7 +13,7 @@ from app.alert_store import AlertStore
 from app.asset_resolver import build_resolver
 from app.clients.binance import BinanceClient
 from app.clients.bybit import BybitClient
-from app.clients.market_data import CompositeMarketDataProvider
+from app.clients.market_data import CompositeMarketDataProvider, public_market_provider
 from app.clients.nansen import NansenClient
 from app.clients.tradingview_mcp import TradingViewMCPClient
 from app.clients.tradingview_scanner import TradingViewScannerClient
@@ -27,6 +28,7 @@ from app.custom_indicators import CustomIndicatorRules
 from app.decision_engine import DecisionEngine
 from app.execution_router import ExecutionRouter
 from app.indicator_matcher import build_matcher
+from app.journal_runner import JournalRunner
 from app.logging_config import setup_logging
 from app.orchestrator import ScanOrchestrator
 from app.signal_journal import SignalJournal
@@ -107,21 +109,48 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resolver=resolver, rules=rules, matcher=matcher,
     )
 
+    # The forward journal gets its own orchestrator. Its settings copy disables execution and Nansen, and its
+    # market provider uses public endpoints only — so a scheduled scan cannot send an order, spend credits, or
+    # load the user's TradingView session. No TypeSafe, no account studies: it measures the base score.
+    runner: JournalRunner | None = None
+    if settings.journal_enabled:
+        jset = settings.model_copy(update={"execution_enabled": False, "nansen_mode": "off"})
+        jmarket = public_market_provider(http, jset)
+        runner = JournalRunner(
+            jset,
+            ScanOrchestrator(jset, jmarket, nansen, alert_store, DecisionEngine(jset, rules), ExecutionRouter(jset, http),
+                             journal=SignalJournal(settings.signal_journal_path, source="scheduled")),
+            jmarket, settings.signal_journal_path,
+        )
+
     app.state.settings = settings
     app.state.alert_store = alert_store
     app.state.orchestrator = orchestrator
 
     telegram = build_application(settings, orchestrator, market, alert_store, nansen, tv_session=tv_session, studies=studies,
-                                 advisor=advisor, router=nl_router)
+                                 advisor=advisor, router=nl_router, journal=runner)
     await telegram.initialize()
     await telegram.start()
     assert telegram.updater is not None
     await telegram.updater.start_polling(drop_pending_updates=True, allowed_updates=["message"])
+
+    journal_task: asyncio.Task[None] | None = None
+    if runner is not None:
+        async def notify(text: str) -> None:
+            for uid in settings.allowed_user_ids:
+                try:
+                    await telegram.bot.send_message(uid, text, parse_mode="HTML")
+                except Exception as exc:  # noqa: BLE001 - one unreachable user must not block the others
+                    logger.warning("journal digest not delivered", extra={"user_id": uid, "error": str(exc)})
+
+        runner.notify = notify
+        journal_task = asyncio.create_task(runner.run_forever(), name="journal-runner")
     logger.info(
         "service started",
         extra={
             "mcp": bool(mcp), "redis": redis is not None, "nansen": f"{settings.nansen_mode}/{'key' if nansen.enabled else 'no-key'}",
             "tv_session": tv_session is not None, "tv_studies": sorted(studies.active()),
+            "journal": f"{len(settings.journal_symbols)} symbols/{settings.journal_timeframe}" if runner else "off",
             "typesafe": f"autoconfig={advisor is not None} natural_language={nl_router is not None} symbols={resolver is not None} indicators={matcher is not None}",
             "execution": "live" if settings.execution_live else ("dry-run" if settings.execution_enabled else "disabled"),
             "allowed_users": len(settings.allowed_user_ids), "custom_indicator_rules": rules.names,
@@ -131,6 +160,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         logger.info("service stopping")
+        if journal_task is not None:
+            journal_task.cancel()
+            try:
+                await journal_task
+            except asyncio.CancelledError:
+                pass
         if telegram.updater is not None and telegram.updater.running:
             await telegram.updater.stop()
         if telegram.running:

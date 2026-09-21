@@ -160,6 +160,41 @@ The matched rule is handed to the engine through the existing `ScanInputs.extra_
 | **Cost** | One request per scan regardless of how many names are unmatched (up to 8), cached per name for 30 days. The cache key includes a fingerprint of your rule set, so editing `custom_indicators.json` invalidates it. |
 | **When it declines** | `none_of_these`, a rule name that does not exist, confidence below `TYPESAFE_INDICATOR_MIN_CONFIDENCE` (0.7), or any API failure — all leave the alert on `DEFAULT_RULE` and report it as unmatched. |
 
+## Forward journal — the test that can't overfit
+
+Every backtest in [docs/CALIBRATION.md](docs/CALIBRATION.md) replays history the engine could in principle have been
+tuned to. The journal can't be: it records each report *before* its outcome exists, then scores it once the bars
+arrive.
+
+It runs inside the app, no cron and no extra container. Five minutes after every 4h candle closes it scans the
+watchlist and appends **every** report to `data/signals.jsonl` — NEUTRAL included, because the question is whether
+the score ranks outcomes and that needs the whole distribution. Every Monday at 08:00 UTC it posts a digest to each
+user in `TELEGRAM_ALLOWED_USER_IDS`; `/journal` shows it on demand.
+
+```
+📓 Forward journal
+Since 2026-09-21: 3,024 reports (2,988 scheduled, 36 manual)
+Independent observations: 156 (142 resolved, 14 pending)
+AUC 0.512 (95% CI 0.418–0.606) → not distinguishable from a coin flip
+Base rate: 13.4% of resolved observations reached TP2
+```
+
+It is deliberately isolated from everything that could cost you:
+
+| | |
+|---|---|
+| **Execution** | its own settings copy with `EXECUTION_ENABLED=false` — it structurally cannot dispatch an order |
+| **Your TradingView account** | public data only (Binance → Bybit → scanner REST); 72 automated scans a day never touch your session cookie |
+| **Credits** | Nansen off, no TypeSafe calls |
+| **Honesty** | one observation per symbol per ISO week, since a 40-bar outcome would overlap consecutive 4h scans and fake a tight interval. A trade whose time stop hasn't elapsed stays *pending*, never scored at today's close. Below 50 resolved observations the digest refuses to give a verdict. |
+
+**Expect it to take months.** Twelve symbols give twelve independent observations a week, so the 50-observation
+floor arrives in about a month and a result worth acting on in three to six. That is the price of an answer that
+cannot have been fitted.
+
+Your own `/scan` reports are journaled too, tagged `manual`, but kept out of the calibration: you choose what to
+scan, and that choice is a biased sample.
+
 ## Connecting your TradingView account
 
 TradingView has no official API for chart or indicator data, so there are two routes:
@@ -297,6 +332,7 @@ Without a domain: `docker compose up -d --build` (base file only) runs bot + Red
 | Restart | `docker compose restart app` |
 | Backup | `tar czf scanner-backup.tgz /opt/tradingview-scanner/.env /opt/tradingview-scanner/data` |
 | Backtest on the server | `docker compose exec app python -m app.backtest BTCUSDT --tf 4h --bars 1500` |
+| Forward-journal digest now | `/journal` in Telegram, or `docker compose exec app python -m app.backtest --journal data/signals.jsonl` |
 | See every TypeSafe request | `docker compose logs -f app \| grep '"msg": "typesafe call"'` |
 
 **Crypto candle sources.** Binance first, then Bybit for anything Binance does not list — Bybit spot, then the linear perpetual, since a new token often trades as a perp long before it gets a spot pair. Both are public endpoints needing no key, and the report's *Sources* line names which one answered (`bybit-spot`, `bybit-linear`). `/status` shows both. Set `BYBIT_ENABLED=false` to pin it to Binance only.

@@ -291,7 +291,14 @@ def evaluate_journal(path: str, frames_for: dict[tuple[str, str], pd.DataFrame],
             continue
         side = Side(rec["signal"])
         risk = abs(rec["entry"] - rec["stop_loss"])
-        j, reason, px = _first_hit(df, start, side, rec["stop_loss"], [rec["tp1"], rec["tp2"], rec["tp3"]], time_stop_bars)
+        # Single target at TP2, matching management_plan(). Passing [tp1, tp2, tp3] exited at whichever target
+        # was touched first — always TP1 — which was neither the old scale-out nor the current plan.
+        j, reason, px = _first_hit(df, start, side, rec["stop_loss"], [rec["tp2"]], time_stop_bars)
+        if reason == "time" and start + time_stop_bars > len(df):
+            # The data ran out, not the time stop: this trade is still open and must not be scored at today's close.
+            rows.append({**rec, "outcome": "pending"})
+            continue
+        reason = "tp2" if reason == "tp1" else reason
         r = (px - rec["entry"]) / risk if side is Side.BUY else (rec["entry"] - px) / risk
         rows.append({**rec, "outcome": reason, "r_multiple": round(r, 2), "bars": j - start})
     return rows
@@ -299,22 +306,11 @@ def evaluate_journal(path: str, frames_for: dict[tuple[str, str], pd.DataFrame],
 
 # ---------------------------------------------------------------------------- CLI
 def backtest_provider(http: httpx.AsyncClient, settings: Settings) -> CompositeMarketDataProvider:
-    """The candle sources a backtest may use: no MCP and no session feed, so history is reproducible, but the
-    same Binance/Bybit/Yahoo chain a live scan falls back to — otherwise a Bybit-only token cannot be tested."""
-    from app.clients.binance import BinanceClient
-    from app.clients.bybit import BybitClient
-    from app.clients.market_data import CompositeMarketDataProvider
-    from app.clients.tradingview_scanner import TradingViewScannerClient
-    from app.clients.twelvedata import TwelveDataClient
-    from app.clients.yahoo import YahooClient
+    """Backtests use the public-only provider: reproducible bars, and the same Binance/Bybit/Yahoo chain a live
+    scan falls back to, so a Bybit-only token can be tested."""
+    from app.clients.market_data import public_market_provider
 
-    return CompositeMarketDataProvider(
-        settings, BinanceClient(http), YahooClient(http),
-        TradingViewScannerClient(http, settings.tv_scanner_stock_market),
-        twelvedata=TwelveDataClient(http, settings.twelvedata_api_key.get_secret_value())
-        if settings.twelvedata_api_key else None,
-        bybit=BybitClient(http, settings.bybit_base_url) if settings.bybit_enabled else None,
-    )
+    return public_market_provider(http, settings)
 
 
 async def _load_frames(asset: AssetInfo, primary: Timeframe, bars: int) -> dict[Timeframe, pd.DataFrame]:

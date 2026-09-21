@@ -17,6 +17,7 @@ from app.clients.nansen import NansenClient
 from app.clients.tradingview_ws import ScriptInfo, TradingViewSessionClient
 from app.command_router import CommandRouter
 from app.config import Settings
+from app.journal_runner import JournalRunner
 from app.orchestrator import ScanError, ScanOrchestrator
 from app.schemas import ConfluenceReport, Side, Signal, Timeframe
 from app.study_advisor import Advice, StudyAdvisor
@@ -39,7 +40,8 @@ _USAGE = (
     "With TYPESAFE_API_KEY set, <code>add</code> picks bucket / plot / thresholds / points from the script itself; "
     "any flag you pass still wins, and <code>auto=off</code> skips it.\n"
     "<code>/indicators active</code> · <code>/indicators remove &lt;name&gt;</code> · <code>/indicators clear</code>\n\n"
-    "<code>/status</code> — upstream health"
+    "<code>/status</code> — upstream health\n"
+    "<code>/journal</code> — forward-test digest: does the score rank outcomes on bars it hadn't seen?"
 )
 _SIGNAL_ICON = {Signal.BUY: "🟢 BUY", Signal.SELL: "🔴 SELL", Signal.WATCH: "🟡 WATCH", Signal.NEUTRAL: "⚪ NEUTRAL"}
 
@@ -179,6 +181,7 @@ def build_application(
     studies: StudyRegistry | None = None,
     advisor: StudyAdvisor | None = None,
     router: CommandRouter | None = None,
+    journal: JournalRunner | None = None,
 ) -> Application:
     allowed = settings.allowed_user_ids
     last_scan: dict[int, float] = {}
@@ -333,6 +336,22 @@ def build_application(
         ]
         return "\n".join(lines)
 
+    async def cmd_journal(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        msg = update.effective_message
+        if msg is None or not authorised(update):
+            return
+        if journal is None:
+            await msg.reply_text("The forward journal is off. Set JOURNAL_ENABLED=true in .env and restart.")
+            return
+        pending = await msg.reply_text("📓 Scoring the journal against the candles that have arrived since...")
+        try:
+            text = await journal.build_digest()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("journal digest failed")
+            await pending.edit_text(f"❌ Couldn't build the digest: {html.escape(str(exc))[:200]}")
+            return
+        await pending.edit_text(text, parse_mode=ParseMode.HTML)
+
     async def cmd_status(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         msg = update.effective_message
         if msg is None or not authorised(update):
@@ -444,6 +463,7 @@ def build_application(
     application.add_handler(CommandHandler("scan", cmd_scan))
     application.add_handler(CommandHandler("status", cmd_status))
     application.add_handler(CommandHandler("indicators", cmd_indicators))
+    application.add_handler(CommandHandler("journal", cmd_journal))
     if router is not None and router.enabled:
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cmd_text))
     return application
