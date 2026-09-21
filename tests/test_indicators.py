@@ -100,3 +100,18 @@ def test_volume_profile_poc_in_range() -> None:
     assert vp is not None
     assert df["low"].min() <= vp.poc <= df["high"].max()
     assert not math.isnan(vp.vah)
+
+
+def test_ema200_has_enough_history_to_match_tradingview() -> None:
+    """An EMA seeded on the first bar keeps (1 - 2/201)^bars of that seed. At the old 300 bars that was 5% and
+    measured up to 5.4% off TradingView's EMA200 on daily charts. Keep the residual under 1%, live and in backtests."""
+    from app.backtest import WARMUP_BARS, Backtester
+    from app.config import Settings
+
+    residual = lambda bars: (1 - 2 / 201) ** bars  # noqa: E731
+    s = Settings(_env_file=None, telegram_bot_token="1:x", tv_webhook_secret="s", redis_url=None)  # type: ignore[call-arg]
+    assert residual(s.candle_limit) < 0.01
+    import inspect
+    defaults = {k: v.default for k, v in inspect.signature(Backtester.__init__).parameters.items()}
+    assert residual(defaults["warmup"]) < 0.01 and residual(WARMUP_BARS) < 0.01
+    assert defaults["window"] >= defaults["warmup"]

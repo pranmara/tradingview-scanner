@@ -33,6 +33,10 @@ from app.indicators import MIN_BARS, InsufficientDataError, analyze_timeframe, c
 from app.schemas import Side, Signal, Timeframe, TimeframeAnalysis
 from app.timeframes import BAR_MS, parse_timeframe
 
+# Confluence timeframes need their own warm-up before the first scored bar, for the same EMA200 reason as
+# Backtester.warmup: (1 - 2/201)^500 < 1%, so every scored bar sees a converged EMA200.
+WARMUP_BARS = 500
+
 if TYPE_CHECKING:  # heavy client imports stay deferred so the CLI starts fast
     import httpx
 
@@ -119,8 +123,8 @@ class Backtester:
         fee_bps: float = 10.0,
         slippage_bps: float = 5.0,
         time_stop_bars: int = 40,
-        window: int = 300,
-        warmup: int = 210,
+        window: int = 1000,
+        warmup: int = 500,
         step: int = 1,
     ) -> None:
         self._engine = engine
@@ -324,7 +328,7 @@ async def _load_frames(asset: AssetInfo, primary: Timeframe, bars: int) -> dict[
         frames: dict[Timeframe, pd.DataFrame] = {}
         span_ms = None
         for tf in dict.fromkeys([primary, Timeframe.H1, Timeframe.H4, Timeframe.D1]):
-            want = bars if tf == primary else (span_ms // BAR_MS[tf] + 300 if span_ms else bars)
+            want = bars if tf == primary else (span_ms // BAR_MS[tf] + WARMUP_BARS if span_ms else bars)
             try:
                 ohlcv = await market.get_ohlcv_history(asset, tf, min(int(want), 5000))
             except Exception as exc:  # noqa: BLE001

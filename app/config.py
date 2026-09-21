@@ -95,7 +95,10 @@ class Settings(BaseSettings):
     min_rrr: float = 2.5
     atr_multiplier: float = 1.5
     max_stop_distance_pct: float = 8.0
-    candle_limit: int = 300
+    # An EMA seeded on the first bar keeps (1 - 2/(n+1))^bars of that seed. For EMA200 that is 5% at 300 bars,
+    # which measured up to 5.4% off TradingView's EMA200 on daily charts; at 1000 bars it is 0.005% and matched
+    # to within 0.06%. Binance returns 1000 bars in one request, so this costs no extra calls.
+    candle_limit: int = 1000
     benchmark_symbol: str = "SPY"
 
     # Regime / best-practice filters

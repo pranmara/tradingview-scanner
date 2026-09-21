@@ -282,6 +282,36 @@ to collect it.
 
 ---
 
+## 9. EMA200 warm-up: a real bug that was not the cause
+
+Checked against TradingView's own values on 8 symbols at 4h and 1d: EMA20, EMA50, RSI and ATR match to within
+0.03%, so the indicator formulas are correct. EMA200 did not. An EMA seeded on its first bar keeps
+`(1 - 2/201)^bars` of that seed: 5% at the old 300-bar `candle_limit`, which measured up to **5.4% off
+TradingView's EMA200 on daily charts**. Backtests were worse, since scoring began at bar 210 (~12% residual).
+
+Fixed: 1000 bars live, a 1000-bar window with a 500-bar warm-up in backtests (residual < 1%, matched to within
+0.06%). Binance serves 1000 bars in one request, so it costs no extra calls.
+
+Re-running section 2's diagnostic with the fix:
+
+| AUC | 2.5R/40 | 1.5R/40 | 2.5R/100 | 1.5R/100 |
+|---|---|---|---|---|
+| score — before | 0.494 | 0.485 | 0.483 | 0.483 |
+| score — after | **0.481** | 0.475 | 0.463 | 0.469 |
+| trend — before | 0.451 | 0.459 | 0.457 | 0.468 |
+| trend — after | **0.425** | 0.441 | **0.416** | 0.439 |
+| execution — after | 0.602 | 0.567 | 0.583 | 0.558 |
+
+**The fix made the score slightly worse, not better.** Computed correctly, the trend bucket points more clearly
+the wrong way (AUC 0.416): aligned ribbons mean extended moves. The bug was diluting that, not hiding an edge.
+The ribbon agreed with TradingView in 16 of 16 checks even at 300 bars; the error mattered only near
+crossovers.
+
+Flipping the trend bucket's sign would look like a fix, but it would be designed on the same data it was measured
+on. It belongs in a forward test, not a backtest.
+
+---
+
 ## Caveats that apply to all of the above
 
 - **Crypto only.** Yahoo rate-limited every equity attempt, so no stock is in any sample.
