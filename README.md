@@ -89,7 +89,7 @@ Rules for trusting a backtest:
 - **Out-of-sample**: tune thresholds on one period (e.g. `--bars 3000` of 1h), then re-run on a different symbol/period without changing anything. If the calibration table collapses, you overfit.
 - **Sample size**: fewer than ~30 trades tells you nothing; use `--min-score` or more bars to get statistical mass, then apply the strict thresholds.
 - **Costs matter**: `--fee-bps 10 --slippage-bps 5` is a taker on a major exchange; use your real numbers. Illiquid alts need 20–50 bps.
-- **Forward-test before live**: every live BUY/SELL/WATCH is appended to `data/signals.jsonl`. After a few weeks run `python -m app.backtest --journal data/signals.jsonl` — it fetches the candles that arrived after each signal and reports realised R. Live results diverging from backtest is the earliest warning that a data source or filter is misbehaving.
+- **Forward-test before live**: every live report is appended to `data/signals.jsonl`, and `/journal` scores them (see [Forward journal](#forward-journal--the-test-that-cant-overfit)). `python -m app.backtest --journal data/signals.jsonl` is narrower: it replays only the BUY/SELL calls against the candles that arrived afterwards and reports realised R, so it prints `0 signals` until one fires. Live results diverging from backtest is the earliest warning that a data source or filter is misbehaving.
 
 ## Asking in plain English (TypeSafe / Jev)
 
@@ -351,7 +351,8 @@ Without a domain: `docker compose up -d --build` (base file only) runs bot + Red
 | Restart | `docker compose restart app` |
 | Backup | `tar czf scanner-backup.tgz /opt/tradingview-scanner/.env /opt/tradingview-scanner/data` |
 | Backtest on the server | `docker compose exec app python -m app.backtest BTCUSDT --tf 4h --bars 1500` |
-| Forward-journal digest now | `/journal` in Telegram, or `docker compose exec app python -m app.backtest --journal data/signals.jsonl` |
+| Forward-journal digest now | `/journal` in Telegram |
+| Realised R of BUY/SELL calls only | `docker compose exec app python -m app.backtest --journal data/signals.jsonl` (0 until a call fires) |
 | Copy of the journal | `/journal backup` in Telegram (also attached to every Monday digest) |
 | See every TypeSafe request | `docker compose logs -f app \| grep '"msg": "typesafe call"'` |
 
