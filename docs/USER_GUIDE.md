@@ -152,7 +152,7 @@ All settings live in `/opt/tradingview-scanner/.env` (`chmod 600`). After editin
 | `RSI_OVEREXTENDED` | 75 | No BUY above / SELL below (100 − value) |
 | `SESSION_FILTER` | true | Intraday scans (≤ 1h) outside London/NY kill zones (UTC 07–10, 12–15) get a caution |
 | `ACCOUNT_EQUITY`, `RISK_PER_TRADE_PCT` | 0 / 1.0 | Position sizing (shown when equity > 0) |
-| `CANDLE_LIMIT` | 300 | Bars per timeframe |
+| `CANDLE_LIMIT` | 1000 | Bars per timeframe; EMA200 needs ~700+ to match TradingView |
 | `BENCHMARK_SYMBOL` | SPY | Fallback benchmark when sector is unknown |
 | `CUSTOM_INDICATORS_PATH` | config/custom_indicators.json | Rules for custom indicators |
 | `SIGNAL_JOURNAL_PATH` | data/signals.jsonl | Live signal log |

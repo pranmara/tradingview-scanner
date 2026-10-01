@@ -22,14 +22,16 @@ BYBIT_INTERVAL: dict[Timeframe, str] = {
     Timeframe.W1: "W",
 }
 
-# (yahoo interval, yahoo range, resample factor)
+# (yahoo interval, yahoo range, resample factor). Ranges are sized for CANDLE_LIMIT=1000 on a 6.5h stock session:
+# 1h over 1y is ~1750 bars, 4h over 2y is ~1000 after resampling, 1d over 5y is ~1250. Yahoo caps intraday at
+# 60d (sub-hour) and 730d (1h), so 30m stays short of 1000 bars.
 YAHOO_FETCH: dict[Timeframe, tuple[str, str, int]] = {
     Timeframe.M5: ("5m", "60d", 1),
     Timeframe.M15: ("15m", "60d", 1),
     Timeframe.M30: ("30m", "60d", 1),
-    Timeframe.H1: ("1h", "3mo", 1),
-    Timeframe.H4: ("1h", "1y", 4),
-    Timeframe.D1: ("1d", "2y", 1),
+    Timeframe.H1: ("1h", "1y", 1),
+    Timeframe.H4: ("1h", "2y", 4),
+    Timeframe.D1: ("1d", "5y", 1),
     Timeframe.W1: ("1wk", "10y", 1),
 }
 
