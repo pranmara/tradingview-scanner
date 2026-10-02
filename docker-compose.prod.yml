@@ -6,6 +6,9 @@ services:
       TV_WEBHOOK_TRUST_PROXY: "true"
 
   caddy:
+    # Disabled: ports 80/443 are now served by /opt/trading-agent Caddy (routes in its deploy/caddy/sites/tv-scanner.routes).
+    # Start this proxy again only with: --profile proxy
+    profiles: ["proxy"]
     image: caddy:2-alpine
     container_name: tv-scanner-caddy
     restart: unless-stopped
